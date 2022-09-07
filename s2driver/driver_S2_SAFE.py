@@ -1,9 +1,10 @@
-
 import glob
 import os
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from numba import jit
+
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
@@ -19,8 +20,9 @@ import scipy.odr as odr
 
 import eoreader as eo
 from eoreader.reader import Reader
+
 plt.ioff()
-save=False
+save = False
 
 cmap = mpl.colors.LinearSegmentedColormap.from_list("",
                                                     ['navy', "blue", 'lightskyblue',
@@ -29,16 +31,15 @@ opj = os.path.join
 imageSAFE = '/sat_data/satellite/sentinel2/L1C/31TFJ/S2A_MSIL1C_20201004T104031_N0209_R008_T31TFJ_20201004T125253.SAFE'
 imageSAFE = '/sat_data/satellite/sentinel2/L1C/31TFJ/S2B_MSIL1C_20220731T103629_N0400_R008_T31TFJ_20220731T124834.SAFE'
 
-
 abspath = os.path.abspath(imageSAFE)
 dirroot, basename = os.path.split(abspath)
 
-res=20
+res = 20
 xml_granule = glob.glob(opj(imageSAFE, 'GRANULE', '*', 'MTD_TL.xml'))[0]
 xml_file = glob.glob(opj(imageSAFE, 'MTD*.xml'))[0]
 
-band_names = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B11', 'B12']
-band_id = [b.replace('B', '') for b in band_names]
+BAND_NAMES = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B11', 'B12']
+BAND_ID = [b.replace('B', '') for b in BAND_NAMES]
 band_idx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12]
 
 norm = mpl.colors.Normalize(vmin=0, vmax=11)
@@ -61,32 +62,32 @@ if processing_baseline < 4:
 else:
     _open_mask = prod._open_mask_gt_4_0
 
-mask_names = eo.products.optical.s2_product.S2GmlMasks.list_values()
-mask_names = ['DETFOO']
-masks_ = []
-for mask_name in mask_names:
-    for i, id in enumerate(band_id):
-        print(id, mask_name)
-        try:
-            mask_ = _open_mask(mask_name, id,res=res).astype(np.int8)
-            mask_.assign_coords(band=[id])
-            prod.clear()
-        except:
-            break
-        if len(mask_) == 0:
-            continue
-        masks_.append(mask_)
-
-        name = mask_.gml_id.str.replace('detector_footprint-', '')
-        name = name.str.split('-', expand=True).values
-        detectorId = (name[:, 2]).astype(int)
-        mask_['bandId'], mask_['detectorId'] = name[:, 0], detectorId
-        mask_ = mask_.set_index(['bandId', 'detectorId'])
-        masks_.append(mask_['geometry'])
-
-detector_num = np.max(detectorId) + 1
-masks = pd.concat(masks_)
-xrmasks = masks.to_xarray()
+# mask_names = eo.products.optical.s2_product.S2GmlMasks.list_values()
+# mask_names = ['DETFOO']
+# masks_ = []
+# for mask_name in mask_names:
+#     for i, id in enumerate(BAND_ID):
+#         print(id, mask_name)
+#         try:
+#             mask_ = _open_mask(mask_name, id, res=res).astype(np.int8)
+#             mask_.assign_coords(band=[id])
+#             prod.clear()
+#         except:
+#             break
+#         if len(mask_) == 0:
+#             continue
+#         masks_.append(mask_)
+#
+#         name = mask_.gml_id.str.replace('detector_footprint-', '')
+#         name = name.str.split('-', expand=True).values
+#         detectorId = (name[:, 2]).astype(int)
+#         mask_['bandId'], mask_['detectorId'] = name[:, 0], detectorId
+#         mask_ = mask_.set_index(['bandId', 'detectorId'])
+#         masks_.append(mask_['geometry'])
+#
+# detector_num = np.max(detectorId) + 1
+# masks = pd.concat(masks_)
+# xrmasks = masks.to_xarray()
 # plt.plot(*masks.geometry.isel(band=0).values[4].exterior.xy)
 
 ds = gdal.Open(xml_file)
@@ -124,15 +125,16 @@ Nx, Ny = sza.shape
 xang = np.linspace(minx, maxx, Nx)
 yang = np.linspace(miny, maxy, Ny)[::-1]
 
-def set_crs(arr,crs):
+
+def set_crs(arr, crs):
     arr.rio.set_crs(crs, inplace=True)
     arr.rio.write_crs(inplace=True)
 
-sun_ang = xr.Dataset(data_vars=dict(sza=([ 'y','x'], sza),
+
+sun_ang = xr.Dataset(data_vars=dict(sza=(['y', 'x'], sza),
                                     sazi=(['y', 'x'], sazi)),
                      coords=dict(x=xang, y=yang))
-set_crs(sun_ang,crs)
-
+set_crs(sun_ang, crs)
 
 # ---------------------------------
 # getting viewing geometry datacube
@@ -141,7 +143,7 @@ bandIds, detectorIds = [], []
 for angleID in root.findall('.//Tile_Angles/Viewing_Incidence_Angles_Grids'):
     bandIds.append(int(angleID.attrib['bandId']))
     detectorIds.append(int(angleID.attrib['detectorId']))
-Nband, Ndetector = np.max(bandIds) + 1, np.max(detectorIds) +1
+Nband, Ndetector = np.max(bandIds) + 1, np.max(detectorIds) + 1
 
 # allocate/fill rasters
 vza, vazi = np.full((Nband, Ndetector, Nx, Ny), np.nan, dtype=float), np.full((Nband, Ndetector, Nx, Ny), np.nan,
@@ -158,26 +160,25 @@ view_ang = xr.Dataset(data_vars=dict(vza=(['bandId', 'detectorId', 'y', 'x'], vz
                       coords=dict(bandId=range(Nband),
                                   detectorId=range(Ndetector),
                                   x=xang, y=yang))
-set_crs(view_ang,crs)
+set_crs(view_ang, crs)
 
 # clean up Dataset (remove empty slices)
-param='vza'
+param = 'vza'
 view_ang = view_ang.dropna('detectorId', how='all')
 
-
-fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(12, 6), sharex=True, sharey=True)
-fig.subplots_adjust(bottom=0.1, top=0.95, left=0.1, right=0.98,
-                    hspace=0.15, wspace=0.1)
-axs = axs.ravel()
-vmin, vmax = view_ang[param].min(), view_ang[param].max()
-for id in range(5):
-    view_ang[param].isel(bandId=0, detectorId=id).plot(ax=axs[id], cmap=cmap, vmin=vmin, vmax=vmax)
-
-    axs[id].plot(*masks[band_names[0],id].exterior.xy,color='black')
-    axs[id].set(xticks=[], yticks=[])
-axs[-1].set_visible(False)
-if save:
-    plt.savefig('./fig/example_detector_raw_angle_'+param+'.png', dpi=300)
+# fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(12, 6), sharex=True, sharey=True)
+# fig.subplots_adjust(bottom=0.1, top=0.95, left=0.1, right=0.98,
+#                     hspace=0.15, wspace=0.1)
+# axs = axs.ravel()
+# vmin, vmax = view_ang[param].min(), view_ang[param].max()
+# for id in range(5):
+#     view_ang[param].isel(bandId=0, detectorId=id).plot(ax=axs[id], cmap=cmap, vmin=vmin, vmax=vmax)
+#
+#     axs[id].plot(*masks[BAND_NAMES[0], id].exterior.xy, color='black')
+#     axs[id].set(xticks=[], yticks=[])
+# axs[-1].set_visible(False)
+# if save:
+#     plt.savefig('./fig/example_detector_raw_angle_' + param + '.png', dpi=300)
 
 # -------------------------
 # interpolation
@@ -189,17 +190,18 @@ if save:
 # tile for 10m resolution: width,height = 10980,10980
 # tile for 20m resolution: width,height = 5490,5490
 # tile for 60m resolution: width,height = 1830,1830
-indexing='xy'
-width, height = 1830,1830 #5490, 5490
-new_x = np.linspace(minx,maxx, width)
-new_y = np.linspace(miny,maxy, height)
-new_xgrid, new_ygrid = np.meshgrid(new_x,new_y, indexing=indexing)
+indexing = 'xy'
+resolution = 60
+width, height = 1830, 1830  # 5490, 5490
+new_x = np.linspace(minx, maxx, width)
+new_y = np.linspace(miny, maxy, height)
+new_xgrid, new_ygrid = np.meshgrid(new_x, new_y, indexing=indexing)
 
 # define the new grids in xarray for further clipping facilities
-coords_arr = xr.Dataset(data_vars=dict(xgrid=([ 'y','x'], new_xgrid),
-                                    ygrid=(['y', 'x'], new_ygrid)),
+coords_arr = xr.Dataset(data_vars=dict(xgrid=(['y', 'x'], new_xgrid),
+                                       ygrid=(['y', 'x'], new_ygrid)),
                         coords=dict(x=new_x, y=new_y))
-set_crs(coords_arr,crs)
+set_crs(coords_arr, crs)
 
 # -----------------------------------------------------------------
 # Sun angles (easy!) based on standard bidimensional interpolation
@@ -207,15 +209,15 @@ set_crs(coords_arr,crs)
 method = 'linear'
 new_sun_ang = sun_ang.interp(x=new_x, y=new_y, method=method)
 
-
 # ------------------------------------------------------
 # Viewing angles (not easy!) based on 2D-plane fitting
 # ------------------------------------------------------
 # convert vza, azi angles into cartesian vector components
 dx = np.tan(np.deg2rad(view_ang.vza)) * np.sin(np.deg2rad(view_ang.vazi))
 dy = np.tan(np.deg2rad(view_ang.vza)) * np.cos(np.deg2rad(view_ang.vazi))
-dx.name='dx'
-dy.name='dy'
+dx.name = 'dx'
+dy.name = 'dy'
+
 
 # dx.isel(bandId=0).plot.imshow(col='detectorId', col_wrap=3, origin='upper', cmap=cmap)
 # dy.isel(bandId=0).plot.imshow(col='detectorId', col_wrap=3, origin='upper', cmap=cmap)
@@ -227,8 +229,23 @@ dy.name='dy'
 def linfit(beta, x):
     return beta[0] * x[0] + beta[1] * x[1] + beta[2]
 
+@jit(nopython=True)#"uint16[:,:](float64[:],float64[:],float64[:,:],float64[:,:],intp,intp)",
+def lin2D(arr,x,y,mask,betas,detector_offset=0,scale_factor=100):
 
-def data_fitting(x0, y0, arr, verbose=False,indexing='xy'):
+    Nx,Ny = mask.shape
+
+    for ii in range(Nx):
+        for jj in range(Ny):
+            detect = mask[ii,jj]
+            if detect == 0:
+                continue
+            beta = betas[detect - detector_offset]
+            val = beta[0] * x[jj] + beta[1] * y[ii] + beta[2]
+            # compression using simple int8 and scale factor
+            arr[ii,jj] = (val * scale_factor)
+
+
+def data_fitting(x0, y0, arr, verbose=False, indexing='xy'):
     xgrid, ygrid = np.meshgrid(x0, y0, indexing=indexing)
 
     # vectorize
@@ -260,89 +277,103 @@ def data_fitting(x0, y0, arr, verbose=False,indexing='xy'):
 
 
 detector_num = 5
-bandId=0
-def get_band_angle_as_numpy(xarr,bandId=0,verbose=True):
-    xarr=view_ang.vazi
-    new_arr=np.full((width, height),np.nan)
+bandId = 2
+detector_mask_name = 'DETFOO'
+betas = np.full((detector_num,3),np.nan)
+arr = np.zeros((Nx,Ny),dtype=np.uint16)
+def get_band_angle_as_numpy(xarr, bandId=0, resolution=20, verbose=True):
+    #xarr = view_ang.vza
+    detector_offset = xarr.detectorId.values.min()
+    mask = _open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution).astype(np.int8)
+    mask = mask.squeeze()
+    x,y = mask.x.values,mask.y.values
+    prod.clear()
+    xarr_= xarr.isel(bandId=bandId)
     for id in range(detector_num):
         # --------------------------------------------------------------
         # Linear 2D-fitting to get the function of the regression plane
         # --------------------------------------------------------------
-        arr = xarr.isel(bandId=bandId,detectorId=id).dropna('y', how='all').dropna('x', how='all')
+        arr = xarr_.isel(detectorId=id).dropna('y', how='all').dropna('x', how='all')
         x0, y0 = arr.x.values, arr.y.values
-        beta = data_fitting(x0, y0, arr,verbose=verbose)
-        #[bandId,id,'dx',*beta]
+        betas[id,:] = data_fitting(x0, y0, arr, verbose=verbose)
+
+        # [bandId,id,'dx',*beta]
         # --------------------------------------------------------------
         # Get detector coordinates from masking with detectorId info
         # --------------------------------------------------------------
-        mask_ = masks[band_names[bandId], id]
-        coords_ = coords_arr.rio.clip([mask_],drop=False)
-        new_xgrid = coords_.xgrid #np.ma.masked_values(coords_.xgrid,np.nan)
-        new_ygrid = coords_.ygrid #np.ma.masked_values(,np.nan)
+    # compression in uint16 (NB: range 0-65535)
+    new_arr = np.full((width, height), np.nan,dtype=np.float32)
+    lin2D(new_arr,x,y,mask.__array__(),betas,detector_offset=detector_offset,scale_factor=1)
+    # plt.figure()
+    # plt.imshow(new_arr, cmap=cmap)
+    # plt.colorbar()
+    # plt.show()
 
-        # --------------------------------------
-        # Compute the angles onto the new grid
-        # and fill the numpy array
-        # --------------------------------------
-        arr_ = linfit(beta, np.array([new_xgrid, new_ygrid]))
-        idx=~np.isnan(arr_)
-        new_arr[idx]= arr_[idx]
-    del arr_
     return new_arr
 
-def get_all_band_angles(view_ang):
+def scat_angle(sza, vza, azi):
+    '''
+    self.azi: azimuth in rad for convention azi=180 when sun-sensor in opposition
+    :return: scattering angle in deg
+    '''
+
+    sza = np.radians(sza)
+    vza = np.radians(vza)
+    azi = np.radians(azi)
+    ang = -np.cos(sza) * np.cos(vza) - np.sin(sza) * np.sin(vza) * np.cos(azi)
+    ang = np.arccos(ang) * 180 / np.pi
+    return ang
+
+def get_all_band_angles(view_ang,resolution=20):
     # ---------------------------------------------------------
     # convert vza, azi angles into cartesian vector components
     # ---------------------------------------------------------
-    dx = np.tan(np.deg2rad(view_ang.vza)) * np.sin(np.deg2rad(view_ang.vazi))
-    dy = np.tan(np.deg2rad(view_ang.vza)) * np.cos(np.deg2rad(view_ang.vazi))
-    dx.name='dx'
-    dy.name='dy'
-    new_dx,new_dy= [],[]
-    for ibandId, bandId in enumerate(view_ang.bandId.values):
+    dx = view_ang.vza #np.tan(np.deg2rad(view_ang.vza)) * np.sin(np.deg2rad(view_ang.vazi))
+    dy = view_ang.vazi #np.tan(np.deg2rad(view_ang.vza)) * np.cos(np.deg2rad(view_ang.vazi))
+    dx.name = 'dx'
+    dy.name = 'dy'
+    new_dx, new_dy = [], []
+    for ibandId, bandId in enumerate(band_idx):
         print(bandId)
-        dx_ = dx.sel(bandId=bandId)
-        dy_ = dy.sel(bandId=bandId)
-        new_dx = get_band_angle_as_numpy(dx,bandId=ibandId)
-        new_dy = get_band_angle_as_numpy(dy,bandId=ibandId)
-        new_dx.append()
-        new_dy.append(get_band_angle_as_numpy(dy_))
+        new_dx.append(get_band_angle_as_numpy(dx, bandId=ibandId,resolution=resolution))
+        new_dy.append(get_band_angle_as_numpy(dy, bandId=ibandId,resolution=resolution))
 
-    new_dx,new_dy= np.array(new_dx), np.array(new_dy)
+    vza,vazi = np.array(new_dx), np.array(new_dy)
+    # vazi = np.arctan2(new_dy,new_dx)
+    # vza = np.degrees(np.arctan2( new_dy/10000,np.cos(vazi)))
 
-
-ang_ = xr.Dataset(data_vars=dict(vza=(['y','x'], new_arr)),
-                  coords=dict(x=new_x, y=new_y))
-set_crs(ang_,crs)
+new_view_ang = xr.Dataset(data_vars=dict(vza=(['band','y', 'x'], vza),
+                                         vazi=(['band','y', 'x'], vazi)),
+                  coords=dict(band=BAND_NAMES,x=new_x, y=new_y[::-1]))
+set_crs(new_view_ang, crs)
 plt.figure()
-ang_.vza.plot()
+new_view_ang.vazi.plot(col='band', cmap=cmap,col_wrap=4,robust=True)
 plt.show()
 
-    detarr = ang_.vza.rio.clip([mask_])
-    arr_new.append(detarr)
+detarr = ang_.vza.rio.clip([mask_])
+arr_new.append(detarr)
 
 arr_new = xr.merge(arr_new)
 arr_new.vza.plot()
 
-
-#---------------------------------
+# ---------------------------------
 # 3D plotting example
 fig = plt.figure(figsize=(20, 10))
 arr = xarr.isel(bandId=0, detectorId=id).dropna('y', how='all').dropna('x', how='all')
-elev,azim=70,20
+elev, azim = 70, 20
 x0, y0 = arr.x.values, arr.y.values
 
 ax = fig.add_subplot(1, 3, 1, projection='3d')
 xgrid, ygrid = np.meshgrid(x0, y0, indexing='ij')
 ax.scatter3D(xgrid, ygrid, arr.values, s=14)
 ax.set_title('raw grid')
-ax.view_init(elev=elev,azim=azim)
+ax.view_init(elev=elev, azim=azim)
 
 ax = fig.add_subplot(1, 3, 2, projection='3d')
 xgrid, ygrid = np.meshgrid(x0, y0, indexing='xy')
 ax.scatter3D(xgrid, ygrid, arr.values, s=14)
 ax.set_title('projected grid')
-ax.view_init(elev=elev,azim=azim)
+ax.view_init(elev=elev, azim=azim)
 
 ax = fig.add_subplot(1, 3, 3, projection='3d')
 beta = data_fitting(x0, y0, arr, verbose=True)
@@ -353,14 +384,14 @@ arr_ = linfit(beta, np.array([new_xgrid, new_ygrid]))
 ang_ = xr.Dataset(data_vars=dict(vza=(['y', 'x'], arr_)),
                   coords=dict(x=xnew, y=ynew))
 ax.scatter3D(xgrid, ygrid, arr.values, s=18)
-ax.scatter3D(new_xgrid, new_ygrid, ang_.vza.values, alpha=0.3,color='red',s=1.2, label='2D-function')
+ax.scatter3D(new_xgrid, new_ygrid, ang_.vza.values, alpha=0.3, color='red', s=1.2, label='2D-function')
 ax.set_title('2D-function fitting')
-ax.view_init(elev=elev,azim=azim)
-#ax.set_zlim(0.078, 0.092)
+ax.view_init(elev=elev, azim=azim)
+# ax.set_zlim(0.078, 0.092)
 if save:
     plt.savefig('./fig/example_3D_fitting_one_detector_v2.png', dpi=300)
 
-#-----------------------------------
+# -----------------------------------
 
 
 kwarg = dict(vmin=xarr.min(), vmax=xarr.max())
@@ -372,29 +403,27 @@ for id in range(5):
     arr = xarr.isel(bandId=bandId, detectorId=id).dropna('y', how='all').dropna('x', how='all')
     x0, y0 = arr.x.values, arr.y.values
 
-    beta = data_fitting(x0, y0, arr,verbose=True)
+    beta = data_fitting(x0, y0, arr, verbose=True)
 
-    xnew = np.linspace(x0.min() * (1-dilation), x0.max() * (1+dilation), 500)
-    ynew = np.linspace(y0.min() * (1-dilation), y0.max() * (1+dilation), 500)
+    xnew = np.linspace(x0.min() * (1 - dilation), x0.max() * (1 + dilation), 500)
+    ynew = np.linspace(y0.min() * (1 - dilation), y0.max() * (1 + dilation), 500)
 
     new_xgrid, new_ygrid = np.meshgrid(xnew, ynew, indexing='xy')
     arr_ = linfit(beta, np.array([new_xgrid, new_ygrid]))
-    ang_ = xr.Dataset(data_vars=dict(vza=(['y','x'], arr_)),
+    ang_ = xr.Dataset(data_vars=dict(vza=(['y', 'x'], arr_)),
                       coords=dict(x=xnew, y=ynew))
-    set_crs(ang_,crs)
+    set_crs(ang_, crs)
     arr.plot.imshow(ax=axs[0, id], cmap=cmap, **kwarg)
-    axs[1,id].plot(*masks[band_names[bandId],id].exterior.xy,color='black')
-    mask_ = masks[band_names[bandId], id]
+    axs[1, id].plot(*masks[BAND_NAMES[bandId], id].exterior.xy, color='black')
+    mask_ = masks[BAND_NAMES[bandId], id]
     ang_.vza.plot.imshow(ax=axs[1, id], cmap=cmap, **kwarg)
     axs[1, id].set_title('fitted 2D-function')
     detarr = ang_.vza.rio.clip([mask_])
     arr_new.append(detarr)
     detarr.plot(ax=axs[2, id], cmap=cmap, **kwarg)
 
-
-
-axs[0, 0].set_xlim((minx,maxx))
-axs[0, 0].set_ylim((miny,maxy))
+axs[0, 0].set_xlim((minx, maxx))
+axs[0, 0].set_ylim((miny, maxy))
 plt.show()
 
 plt.savefig('./fig/example_2D_fitting_one_band_v3.png', dpi=300)
