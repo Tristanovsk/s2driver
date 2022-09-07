@@ -194,14 +194,8 @@ indexing = 'xy'
 resolution = 60
 width, height = 1830, 1830  # 5490, 5490
 new_x = np.linspace(minx, maxx, width)
-new_y = np.linspace(miny, maxy, height)
-new_xgrid, new_ygrid = np.meshgrid(new_x, new_y, indexing=indexing)
+new_y = np.linspace(miny, maxy, height)[::-1]
 
-# define the new grids in xarray for further clipping facilities
-coords_arr = xr.Dataset(data_vars=dict(xgrid=(['y', 'x'], new_xgrid),
-                                       ygrid=(['y', 'x'], new_ygrid)),
-                        coords=dict(x=new_x, y=new_y))
-set_crs(coords_arr, crs)
 
 # -----------------------------------------------------------------
 # Sun angles (easy!) based on standard bidimensional interpolation
@@ -212,15 +206,6 @@ new_sun_ang = sun_ang.interp(x=new_x, y=new_y, method=method)
 # ------------------------------------------------------
 # Viewing angles (not easy!) based on 2D-plane fitting
 # ------------------------------------------------------
-# convert vza, azi angles into cartesian vector components
-dx = np.tan(np.deg2rad(view_ang.vza)) * np.sin(np.deg2rad(view_ang.vazi))
-dy = np.tan(np.deg2rad(view_ang.vza)) * np.cos(np.deg2rad(view_ang.vazi))
-dx.name = 'dx'
-dy.name = 'dy'
-
-
-# dx.isel(bandId=0).plot.imshow(col='detectorId', col_wrap=3, origin='upper', cmap=cmap)
-# dy.isel(bandId=0).plot.imshow(col='detectorId', col_wrap=3, origin='upper', cmap=cmap)
 
 # ---------------------------------
 # test with ODR multilinear regression
@@ -277,7 +262,7 @@ def data_fitting(x0, y0, arr, verbose=False, indexing='xy'):
 
 
 detector_num = 5
-bandId = 2
+
 detector_mask_name = 'DETFOO'
 betas = np.full((detector_num,3),np.nan)
 arr = np.zeros((Nx,Ny),dtype=np.uint16)
@@ -321,331 +306,39 @@ def scat_angle(sza, vza, azi):
     vza = np.radians(vza)
     azi = np.radians(azi)
     ang = -np.cos(sza) * np.cos(vza) - np.sin(sza) * np.sin(vza) * np.cos(azi)
-    ang = np.arccos(ang) * 180 / np.pi
-    return ang
+    ang = np.arccos(ang)
+    return np.degrees(ang)
 
 def get_all_band_angles(view_ang,resolution=20):
+
+    vza = view_ang.vza
+    vazi = view_ang.vazi
+
     # ---------------------------------------------------------
     # convert vza, azi angles into cartesian vector components
+    # (NOT NEEDED FOR THE MOMENT!!)
     # ---------------------------------------------------------
-    dx = view_ang.vza #np.tan(np.deg2rad(view_ang.vza)) * np.sin(np.deg2rad(view_ang.vazi))
-    dy = view_ang.vazi #np.tan(np.deg2rad(view_ang.vza)) * np.cos(np.deg2rad(view_ang.vazi))
-    dx.name = 'dx'
-    dy.name = 'dy'
-    new_dx, new_dy = [], []
+    # np.tan(np.deg2rad(view_ang.vza)) * np.sin(np.deg2rad(view_ang.vazi))
+    # np.tan(np.deg2rad(view_ang.vza)) * np.cos(np.deg2rad(view_ang.vazi))
+    # dx.name = 'dx'
+    # dy.name = 'dy'
+
+    new_vza, new_vazi = [], []
     for ibandId, bandId in enumerate(band_idx):
         print(bandId)
-        new_dx.append(get_band_angle_as_numpy(dx, bandId=ibandId,resolution=resolution))
-        new_dy.append(get_band_angle_as_numpy(dy, bandId=ibandId,resolution=resolution))
+        new_vza.append(get_band_angle_as_numpy(vza, bandId=ibandId,resolution=resolution))
+        new_vazi.append(get_band_angle_as_numpy(vazi, bandId=ibandId,resolution=resolution))
 
-    vza,vazi = np.array(new_dx), np.array(new_dy)
-    # vazi = np.arctan2(new_dy,new_dx)
-    # vza = np.degrees(np.arctan2( new_dy/10000,np.cos(vazi)))
+    new_view_ang = xr.Dataset(data_vars=dict(vza=(['band','y', 'x'], np.array(new_vza)),
+                                         vazi=(['band','y', 'x'], np.array(new_vazi))),
+                  coords=dict(band=BAND_NAMES,x=new_x, y=new_y))
+    return new_view_ang
 
-new_view_ang = xr.Dataset(data_vars=dict(vza=(['band','y', 'x'], vza),
-                                         vazi=(['band','y', 'x'], vazi)),
-                  coords=dict(band=BAND_NAMES,x=new_x, y=new_y[::-1]))
+new_view_ang = get_all_band_angles(view_ang,resolution=resolution)
 set_crs(new_view_ang, crs)
+
 plt.figure()
 new_view_ang.vazi.plot(col='band', cmap=cmap,col_wrap=4,robust=True)
 plt.show()
 
-detarr = ang_.vza.rio.clip([mask_])
-arr_new.append(detarr)
 
-arr_new = xr.merge(arr_new)
-arr_new.vza.plot()
-
-# ---------------------------------
-# 3D plotting example
-fig = plt.figure(figsize=(20, 10))
-arr = xarr.isel(bandId=0, detectorId=id).dropna('y', how='all').dropna('x', how='all')
-elev, azim = 70, 20
-x0, y0 = arr.x.values, arr.y.values
-
-ax = fig.add_subplot(1, 3, 1, projection='3d')
-xgrid, ygrid = np.meshgrid(x0, y0, indexing='ij')
-ax.scatter3D(xgrid, ygrid, arr.values, s=14)
-ax.set_title('raw grid')
-ax.view_init(elev=elev, azim=azim)
-
-ax = fig.add_subplot(1, 3, 2, projection='3d')
-xgrid, ygrid = np.meshgrid(x0, y0, indexing='xy')
-ax.scatter3D(xgrid, ygrid, arr.values, s=14)
-ax.set_title('projected grid')
-ax.view_init(elev=elev, azim=azim)
-
-ax = fig.add_subplot(1, 3, 3, projection='3d')
-beta = data_fitting(x0, y0, arr, verbose=True)
-xnew = np.linspace(x0.min() - 1, x0.max() + 1, 50)
-ynew = np.linspace(y0.min() - 1, y0.max() + 1, 50)
-new_xgrid, new_ygrid = np.meshgrid(xnew, ynew, indexing='xy')
-arr_ = linfit(beta, np.array([new_xgrid, new_ygrid]))
-ang_ = xr.Dataset(data_vars=dict(vza=(['y', 'x'], arr_)),
-                  coords=dict(x=xnew, y=ynew))
-ax.scatter3D(xgrid, ygrid, arr.values, s=18)
-ax.scatter3D(new_xgrid, new_ygrid, ang_.vza.values, alpha=0.3, color='red', s=1.2, label='2D-function')
-ax.set_title('2D-function fitting')
-ax.view_init(elev=elev, azim=azim)
-# ax.set_zlim(0.078, 0.092)
-if save:
-    plt.savefig('./fig/example_3D_fitting_one_detector_v2.png', dpi=300)
-
-# -----------------------------------
-
-
-kwarg = dict(vmin=xarr.min(), vmax=xarr.max())
-fig, axs = plt.subplots(nrows=3, ncols=5, figsize=(22, 12), sharex=True, sharey=True)
-fig.subplots_adjust(bottom=0.05, top=0.965, left=0.05, right=0.98,
-                    hspace=0.12, wspace=0.1)
-new_arr = np.full
-for id in range(5):
-    arr = xarr.isel(bandId=bandId, detectorId=id).dropna('y', how='all').dropna('x', how='all')
-    x0, y0 = arr.x.values, arr.y.values
-
-    beta = data_fitting(x0, y0, arr, verbose=True)
-
-    xnew = np.linspace(x0.min() * (1 - dilation), x0.max() * (1 + dilation), 500)
-    ynew = np.linspace(y0.min() * (1 - dilation), y0.max() * (1 + dilation), 500)
-
-    new_xgrid, new_ygrid = np.meshgrid(xnew, ynew, indexing='xy')
-    arr_ = linfit(beta, np.array([new_xgrid, new_ygrid]))
-    ang_ = xr.Dataset(data_vars=dict(vza=(['y', 'x'], arr_)),
-                      coords=dict(x=xnew, y=ynew))
-    set_crs(ang_, crs)
-    arr.plot.imshow(ax=axs[0, id], cmap=cmap, **kwarg)
-    axs[1, id].plot(*masks[BAND_NAMES[bandId], id].exterior.xy, color='black')
-    mask_ = masks[BAND_NAMES[bandId], id]
-    ang_.vza.plot.imshow(ax=axs[1, id], cmap=cmap, **kwarg)
-    axs[1, id].set_title('fitted 2D-function')
-    detarr = ang_.vza.rio.clip([mask_])
-    arr_new.append(detarr)
-    detarr.plot(ax=axs[2, id], cmap=cmap, **kwarg)
-
-axs[0, 0].set_xlim((minx, maxx))
-axs[0, 0].set_ylim((miny, maxy))
-plt.show()
-
-plt.savefig('./fig/example_2D_fitting_one_band_v3.png', dpi=300)
-
-fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(12, 10), sharex=True, sharey=True)
-axs = axs.ravel()
-fig.subplots_adjust(bottom=0.05, top=0.965, left=0.05, right=0.98,
-                    hspace=0.12, wspace=0.1)
-
-id = 1
-arr = dx.isel(bandId=0, detectorId=id).dropna('y', how='all').dropna('x', how='all')
-x0, y0 = arr.x.values, arr.y.values
-xgrid, ygrid = np.meshgrid(x0, y0, indexing='ij')
-arr_ = linfit(beta, np.array([xgrid, ygrid]))
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=x0, y=y0))
-
-kwarg = dict(vmin=arr.min(), vmax=arr.max())
-arr.plot.imshow(ax=axs[0], cmap=cmap, **kwarg)
-axs[0].set_title('raw data')
-ang_.vza.plot.imshow(ax=axs[1], cmap=cmap, **kwarg)
-axs[1].set_title('fitted 2D-function (raw grid)')
-residual = arr - ang_.vza
-residual.plot.imshow(ax=axs[2], cmap=plt.cm.RdBu)
-axs[2].set_title('Residuals')
-
-xnew = np.linspace(x0.min(), x0.max(), 500)
-ynew = np.linspace(y0.min(), y0.max(), 500)
-new_xgrid, new_ygrid = np.meshgrid(xnew, ynew, indexing='ij')
-arr_ = linfit(beta, np.array([new_xgrid, new_ygrid]))
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=xnew, y=ynew))
-ang_.vza.plot.imshow(ax=axs[3], cmap=cmap, **kwarg)
-axs[3].set_title('2D-function in new grid')
-plt.savefig('./fig/example_2D_fitting_one_detector.png', dpi=300)
-
-dims = xgrid.size
-shape = xgrid.shape
-fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(12, 6))
-axs = axs.ravel()
-for i, theta in enumerate([0, 70, 75, 76, 77, 76]):
-    cos_, sin_ = np.cos(np.radians(theta)), np.sin(np.radians(theta))
-    xgrid_prime = xgrid * cos_ + ygrid * sin_
-    ygrid_prime = -xgrid * sin_ + ygrid * cos_
-    axs[i].scatter(xgrid_prime, ygrid_prime, c=arr.values, cmap=cmap)
-    axs[i].set_title(str(theta))
-
-# rotate x, y
-theta = 76
-xgrid_prime, ygrid_prime = rot_plane(xgrid, ygrid, theta)
-
-# vectorize
-values = arr.values.flatten()
-x_prime = xgrid_prime.flatten()
-y_prime = ygrid_prime.flatten()
-
-# remove NaN
-idx = ~np.isnan(values)
-values = values[idx]
-points = np.empty((2, len(values)))
-points[0] = x_prime[idx]
-points[1] = y_prime[idx]
-
-# interp = RBFInterpolator(points.T,values,kernel='linear')
-# new_points = np.vstack([x_prime,y_prime])
-# arr_ =interp(new_points.T).reshape([23,7])
-# ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-#                       coords=dict(x=x0, y=y0))
-
-# set ODR fitting
-mean = np.nanmean(values)
-linear = odr.Model(linfit)
-data = odr.Data(points, values)
-beta0 = [0, 0, mean]
-fit = odr.ODR(data, linear, beta0=beta0, taufac=0.01, ndigit=3)
-fit.set_job(fit_type=0)
-resfit = fit.run()
-resfit.pprint()
-beta = resfit.beta
-
-fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(12, 10), sharex=True, sharey=True)
-axs = axs.ravel()
-fig.subplots_adjust(bottom=0.05, top=0.965, left=0.05, right=0.98,
-                    hspace=0.12, wspace=0.1)
-
-arr_ = linfit(beta, np.array([xgrid_prime, ygrid_prime]))
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=x0, y=y0))
-
-kwarg = dict(vmin=arr.min(), vmax=arr.max())
-arr.plot.imshow(ax=axs[0], cmap=cmap, **kwarg)
-axs[0].set_title('raw data')
-ang_.vza.plot.imshow(ax=axs[1], cmap=cmap, **kwarg)
-axs[1].set_title('fitted 2D-function (raw grid)')
-residual = arr - ang_.vza
-residual.plot.imshow(ax=axs[2], cmap=plt.cm.RdBu)
-axs[2].set_title('Residuals')
-
-xnew = np.linspace(x0.min(), x0.max(), 500)
-ynew = np.linspace(y0.min(), y0.max(), 500)
-
-# rotate
-new_xgrid, new_ygrid = np.meshgrid(xnew, ynew, indexing='ij')
-new_xgrid_prime, new_ygrid_prime = rot_plane(new_xgrid, new_ygrid, theta)
-
-arr_ = linfit(beta, np.array([new_xgrid_prime, new_ygrid_prime]))
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=xnew, y=ynew))
-ang_.vza.plot.imshow(ax=axs[3], cmap=cmap, **kwarg)
-axs[3].set_title('2D-function in new grid')
-plt.savefig('./fig/example_2D_fitting_one_detector.png', dpi=300)
-
-# illustration roatation in 3D
-from mpl_toolkits import mplot3d
-
-fig = plt.figure(figsize=(12, 6))
-ax = fig.add_subplot(1, 3, 1, projection='3d')
-ax.scatter3D(xgrid, ygrid, arr.values, s=14)
-ax.set_title('raw grid')
-ax = fig.add_subplot(1, 3, 2, projection='3d')
-ax.scatter3D(xgrid_prime, ygrid_prime, arr.values, s=14)
-ax.set_title('projected grid')
-ax = fig.add_subplot(1, 3, 3, projection='3d')
-ax.scatter3D(xgrid_prime, ygrid_prime, arr.values, s=14)
-ax.scatter3D(new_xgrid, new_ygrid, ang_.vza.values, s=2, label='2D-function')
-ax.set_title('2D-function fitting')
-
-arr_ = linfit(beta, np.array([new_xgrid, new_ygrid]))
-
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=xnew, y=ynew))
-
-xnew = np.linspace(x0.min(), x0.max(), 50)
-ynew = np.linspace(y0.min(), y0.max(), 50)
-
-# rotate
-new_xgrid, new_ygrid = np.meshgrid(xnew, ynew, indexing='ij')
-new_xgrid_prime, new_ygrid_prime = rot_plane(new_xgrid, new_ygrid, theta)
-
-arr_ = linfit(beta, np.array([new_xgrid_prime, new_ygrid_prime]))
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=xnew, y=ynew))
-
-fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(12, 6), sharex=True, sharey=True)
-axs = axs.ravel()
-fig.subplots_adjust(bottom=0.1, top=0.965, left=0.1, right=0.98,
-                    hspace=0.075, wspace=0.1)
-
-kwarg = dict(vmin=arr.min(), vmax=arr.max())
-
-arr.plot.imshow(ax=axs[3], cmap=cmap, **kwarg)
-arr.plot.imshow(ax=axs[0], cmap=cmap, **kwarg)
-arr_ = linfit(beta, np.array([new_xgrid, new_ygrid])).T
-arr_[np.isnan(arr.values)] = np.nan
-
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=xnew, y=ynew))
-
-ang_.vza.plot.imshow(ax=axs[1], cmap=cmap, **kwarg)
-residual = arr - ang_.vza
-residual.plot.imshow(ax=axs[2], cmap=cmap, )
-
-# beta_=np.array([-0.004,-0.015])-0.005
-arr_ = linfit(beta_, np.array([xgrid, ygrid])).T
-arr_[np.isnan(arr.values)] = np.nan
-ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                  coords=dict(x=x0, y=y0))
-ang_.vza.plot.imshow(ax=axs[4], cmap=cmap, **kwarg)
-
-residual = arr - ang_.vza
-residual.plot.imshow(ax=axs[5], origin='upper', cmap=cmap)
-axs[-1].set_xlim((0, 22))
-
-# ---------------------------------
-# test with RegularGridInterpolator
-# ---------------------------------
-
-fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharey=True)
-fig.subplots_adjust(bottom=0.15, top=0.985, left=0.1, right=0.98,
-                    hspace=0.01, wspace=0.025)
-for id in range(5):
-    arr = view_ang.vza.isel(bandId=0, detectorId=id).dropna('y', how='all').dropna('x', how='all')
-    interp = RegularGridInterpolator((arr.x.values, arr.y.values), arr.values, bounds_error=False, fill_value=None)
-
-    interp = RBFInterpolator((arr.x.values, arr.y.values), arr.values)
-
-    values = arr.values.flatten()
-    xgrid, ygrid = np.meshgrid(arr.x, arr.y)
-    x_ = np.linspace(arr.x.min(), arr.x.max(), 500)
-    y_ = np.linspace(arr.y.min(), arr.y.max(), 500)
-    new_xgrid, new_ygrid = np.meshgrid(x_, y_)
-    arr_ = interp((new_xgrid, new_ygrid)).T
-    ang_ = xr.Dataset(data_vars=dict(vza=(['x', 'y'], arr_)),
-                      coords=dict(x=x_, y=y_))  # .interp(x=x_full,y=y_full,method='nearest')
-
-    arr.plot(ax=axs[0])
-    ang_.vza.plot(ax=axs[1])
-
-dims = xgrid.size
-points = np.empty((dims, 2))
-points[:, 0] = xgrid.flatten()
-points[:, 1] = ygrid.flatten()
-grid = np.stack((arr.x, arr.y), axis=1)
-
-linmod = scipy.odr.Model(linfit)
-data = scipy.odr.Data(points, values)
-odrfit = scipy.odr.ODR(data, linmod, beta0=[1., 1., 1.])
-odrres = odrfit.run()
-odrres.pprint()
-
-interp = LinearNDInterpolator(points, values)
-interpolated_values = griddata(points, values, (new_xgrid, new_ygrid), method='linear')
-
-grid = arr.values
-x, y = np.indices(grid.shape)
-xvalid = x[~np.isnan(grid)]
-xvalid = x[~np.isnan(grid)]
-reg = LinearRegression().fit(
-    np.stack((x[~np.isnan(grid)], y[~np.isnan(grid)]), axis=1),
-    grid[~np.isnan(grid)])
-grid_filled = reg.predict(np.stack((x.ravel(), y.ravel()),
-                                   axis=1)).reshape(grid.shape)
-out_grid[np.isnan(grid)] = grid_filled[np.isnan(grid)]
-
-arr_ = arr.interp(x=new_x, y=new_y, method=method)
