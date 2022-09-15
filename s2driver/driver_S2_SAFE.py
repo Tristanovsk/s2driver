@@ -38,8 +38,11 @@ res = 20
 xml_granule = glob.glob(opj(imageSAFE, 'GRANULE', '*', 'MTD_TL.xml'))[0]
 xml_file = glob.glob(opj(imageSAFE, 'MTD*.xml'))[0]
 
-BAND_NAMES = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B11', 'B12']
+BAND_NAMES = np.array(['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A','B09','B10' ,'B11', 'B12'])
 BAND_ID = [b.replace('B', '') for b in BAND_NAMES]
+NATIVE_RESOLUTION = [60,10,10,10,20,20,20,10,20,60,60,20,20]
+
+# select band to process and load
 band_idx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12]
 
 norm = mpl.colors.Normalize(vmin=0, vmax=11)
@@ -197,15 +200,6 @@ new_x = np.linspace(minx, maxx, width)
 new_y = np.linspace(miny, maxy, height)[::-1]
 
 
-# -----------------------------------------------------------------
-# Sun angles (easy!) based on standard bidimensional interpolation
-# -----------------------------------------------------------------
-method = 'linear'
-new_sun_ang = sun_ang.interp(x=new_x, y=new_y, method=method)
-
-# ------------------------------------------------------
-# Viewing angles (not easy!) based on 2D-plane fitting
-# ------------------------------------------------------
 
 # ---------------------------------
 # test with ODR multilinear regression
@@ -271,9 +265,22 @@ def get_band_angle_as_numpy(xarr, bandId=0, resolution=20, verbose=True):
     detector_offset = xarr.detectorId.values.min()
     mask = _open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution).astype(np.int8)
     mask = mask.squeeze()
+
+    # TODO check how to avoid taking the nodata value "0" when coarsening the raster
+    # TODO for the moment this induces bad detector number at the edge of the image swath
+    # mask = _open_mask(detector_mask_name, BAND_ID[bandId], resolution=NATIVE_RESOLUTION[bandId])
+    # # mask nodata value
+    # mask = mask.where(mask!=0)
+    # # resample mask at the desired resolution
+    # if resolution != NATIVE_RESOLUTION[iband]:
+    #     mask = mask.interp(x=new_x, y=new_y, method='nearest')
+    # # compress mask into int8
+    # mask = mask.astype(np.int8)
+
+
     x,y = mask.x.values,mask.y.values
     prod.clear()
-    xarr_= xarr.isel(bandId=bandId)
+    xarr_= xarr.sel(bandId=bandId)
     for id in range(detector_num):
         # --------------------------------------------------------------
         # Linear 2D-fitting to get the function of the regression plane
@@ -293,7 +300,7 @@ def get_band_angle_as_numpy(xarr, bandId=0, resolution=20, verbose=True):
     # plt.imshow(new_arr, cmap=cmap)
     # plt.colorbar()
     # plt.show()
-
+    del mask
     return new_arr
 
 def scat_angle(sza, vza, azi):
@@ -309,8 +316,16 @@ def scat_angle(sza, vza, azi):
     ang = np.arccos(ang)
     return np.degrees(ang)
 
-def get_all_band_angles(view_ang,resolution=20):
+def get_all_band_angles(sun_ang,view_ang,band_idx,crs=None,resolution=20,method='linear'):
 
+    # -----------------------------------------------------------------
+    # Sun angles (easy!) based on standard bidimensional interpolation
+    # -----------------------------------------------------------------
+    new_sun_ang = sun_ang.interp(x=new_x, y=new_y, method=method)
+
+    # ------------------------------------------------------
+    # Viewing angles (not easy!) based on 2D-plane fitting
+    # ------------------------------------------------------
     vza = view_ang.vza
     vazi = view_ang.vazi
 
@@ -326,19 +341,34 @@ def get_all_band_angles(view_ang,resolution=20):
     new_vza, new_vazi = [], []
     for ibandId, bandId in enumerate(band_idx):
         print(bandId)
-        new_vza.append(get_band_angle_as_numpy(vza, bandId=ibandId,resolution=resolution))
-        new_vazi.append(get_band_angle_as_numpy(vazi, bandId=ibandId,resolution=resolution))
+        new_vza.append(get_band_angle_as_numpy(vza, bandId=bandId,resolution=resolution))
+        new_vazi.append(get_band_angle_as_numpy(vazi, bandId=bandId,resolution=resolution))
 
-    new_view_ang = xr.Dataset(data_vars=dict(vza=(['band','y', 'x'], np.array(new_vza)),
+    new_ang = xr.Dataset(data_vars=dict(vza=(['band','y', 'x'], np.array(new_vza)),
                                          vazi=(['band','y', 'x'], np.array(new_vazi))),
-                  coords=dict(band=BAND_NAMES,x=new_x, y=new_y))
-    return new_view_ang
+                  coords=dict(band=BAND_NAMES[band_idx],x=new_x, y=new_y))
+    new_ang['sza'] = new_sun_ang.sza
+    new_ang['razi'] = new_ang.vazi - new_sun_ang.sazi
+    new_ang['scat_ang'] = scat_angle(new_ang.sza, new_ang.vza, new_ang.razi)
 
-new_view_ang = get_all_band_angles(view_ang,resolution=resolution)
-set_crs(new_view_ang, crs)
+    if crs:
+        set_crs(new_ang, crs)
+
+    del new_vza, new_vazi, vza, vazi, new_sun_ang
+
+    return new_ang
+
+new_ang = get_all_band_angles(sun_ang,view_ang,band_idx,crs=crs,resolution=resolution)
+del view_ang, sun_ang
+
 
 plt.figure()
-new_view_ang.vazi.plot(col='band', cmap=cmap,col_wrap=4,robust=True)
+fig = new_ang.scat_ang.plot(col='band', cmap=cmap,col_wrap=4,robust=True,aspect=1)
+for ax in fig.axes.flat:
+    ax.set(xticks=[], yticks=[])
+    ax.set_ylabel('')
+    ax.set_xlabel('')
+plt.savefig('./fig/example_scattering_angle_all_bands.png',dpi=300)
 plt.show()
 
 
