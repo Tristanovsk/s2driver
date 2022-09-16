@@ -20,6 +20,7 @@ import scipy.odr as odr
 
 import eoreader as eo
 from eoreader.reader import Reader
+import eoreader.bands as eobands
 
 plt.ioff()
 save = False
@@ -31,19 +32,39 @@ opj = os.path.join
 imageSAFE = '/sat_data/satellite/sentinel2/L1C/31TFJ/S2A_MSIL1C_20201004T104031_N0209_R008_T31TFJ_20201004T125253.SAFE'
 imageSAFE = '/sat_data/satellite/sentinel2/L1C/31TFJ/S2B_MSIL1C_20220731T103629_N0400_R008_T31TFJ_20220731T124834.SAFE'
 
+
+# TODO put it as class
+
 abspath = os.path.abspath(imageSAFE)
 dirroot, basename = os.path.split(abspath)
 
-res = 20
+
+# --------------------------------
+# define interpolation parameters
+# --------------------------------
+# tile for 10m resolution: width,height = 10980,10980
+# tile for 20m resolution: width,height = 5490,5490
+# tile for 60m resolution: width,height = 1830,1830
+
+resolution = 60
+width, height = 1830, 1830  # 5490, 5490
+resolution = 20
+width, height = 5490, 5490
+
 xml_granule = glob.glob(opj(imageSAFE, 'GRANULE', '*', 'MTD_TL.xml'))[0]
 xml_file = glob.glob(opj(imageSAFE, 'MTD*.xml'))[0]
 
 BAND_NAMES = np.array(['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A','B09','B10' ,'B11', 'B12'])
+BAND_NAMES_EOREADER = np.array(['CA','BLUE','GREEN','RED','VRE_1',
+                                'VRE_2','VRE_3','NARROW_NIR','NIR',
+                                'WV','SWIR_CIRRUS','SWIR_1','SWIR_2'])
+
 BAND_ID = [b.replace('B', '') for b in BAND_NAMES]
 NATIVE_RESOLUTION = [60,10,10,10,20,20,20,10,20,60,60,20,20]
 
 # select band to process and load
 band_idx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12]
+#band_idx = [ 1, 2, 3]
 
 norm = mpl.colors.Normalize(vmin=0, vmax=11)
 
@@ -55,6 +76,24 @@ extent = prod.extent()
 bounds = extent.bounds
 minx, miny, maxx, maxy = bounds.values[0]
 crs = prod.crs()
+
+#----------------------------------
+# getting bands
+#----------------------------------
+
+bands = prod.stack(list(BAND_NAMES_EOREADER[band_idx]),resolution=resolution)
+bands = bands.rename({'z': 'bandID'})
+bands = bands.assign_coords(bandID=list(BAND_NAMES[band_idx]))
+prod.clear()
+
+plt.figure()
+fig = bands[:, ::10, ::10].plot(col='bandID',col_wrap=4,aspect=1.15,robust=True,cmap=plt.cm.binary_r)
+for ax in fig.axes.flat:
+    ax.set(xticks=[], yticks=[])
+    ax.set_ylabel('')
+    ax.set_xlabel('')
+plt.savefig('./fig/example_reflectance_all_bands.png',dpi=300)
+#plt.show()
 
 # ---------------------------------
 # getting detector masks
@@ -187,15 +226,8 @@ view_ang = view_ang.dropna('detectorId', how='all')
 # interpolation
 # -------------------------
 
-# --------------------------------
-# define interpolation parameters
-# --------------------------------
-# tile for 10m resolution: width,height = 10980,10980
-# tile for 20m resolution: width,height = 5490,5490
-# tile for 60m resolution: width,height = 1830,1830
 indexing = 'xy'
-resolution = 60
-width, height = 1830, 1830  # 5490, 5490
+
 new_x = np.linspace(minx, maxx, width)
 new_y = np.linspace(miny, maxy, height)[::-1]
 
@@ -344,12 +376,12 @@ def get_all_band_angles(sun_ang,view_ang,band_idx,crs=None,resolution=20,method=
         new_vza.append(get_band_angle_as_numpy(vza, bandId=bandId,resolution=resolution))
         new_vazi.append(get_band_angle_as_numpy(vazi, bandId=bandId,resolution=resolution))
 
-    new_ang = xr.Dataset(data_vars=dict(vza=(['band','y', 'x'], np.array(new_vza)),
-                                         vazi=(['band','y', 'x'], np.array(new_vazi))),
+    new_ang = xr.Dataset(data_vars=dict(vza=(['bandID','y', 'x'], np.array(new_vza)),
+                                         vazi=(['bandID','y', 'x'], np.array(new_vazi))),
                   coords=dict(band=BAND_NAMES[band_idx],x=new_x, y=new_y))
     new_ang['sza'] = new_sun_ang.sza
     new_ang['razi'] = new_ang.vazi - new_sun_ang.sazi
-    new_ang['scat_ang'] = scat_angle(new_ang.sza, new_ang.vza, new_ang.razi)
+    #new_ang['scat_ang'] = scat_angle(new_ang.sza, new_ang.vza, new_ang.razi)
 
     if crs:
         set_crs(new_ang, crs)
@@ -361,14 +393,65 @@ def get_all_band_angles(sun_ang,view_ang,band_idx,crs=None,resolution=20,method=
 new_ang = get_all_band_angles(sun_ang,view_ang,band_idx,crs=crs,resolution=resolution)
 del view_ang, sun_ang
 
+#------------------------------------------------------------------------------------------
+#------------------------------------------------------------------------------------------
+#------------------------------------------------------------------------------------------
+import cartopy.crs as ccrs
+from matplotlib.colors import ListedColormap
+#binary cmap
+bcmap = ListedColormap(['khaki', 'lightblue'])
+# Compute cartopy projection (EOReader always is in UTM)
+extent = prod.extent()
+str_epsg = str(extent.crs.to_epsg())
+zone = str_epsg[-2:]
+is_south = str_epsg[2] == 7
+proj = ccrs.UTM(zone, is_south)
+
+# Get extent values
+# The extents must be defined in the form (min_x, max_x, min_y, max_y)
+bounds = extent.bounds
+extent_val = [bounds.minx[0], bounds.maxx[0], bounds.miny[0], bounds.maxy[0]]
+
+# Compute NDWI
+green = bands.sel(bandID='B03')
+nir =bands.sel(bandID='B8A')
+ndwi = (green - nir)/(green + nir)
+
+def water_mask(ndwi,threshold=0):
+    water = xr.where(ndwi > threshold, 1, 0)
+    return water.where(~np.isnan(ndwi))
+
+plt.figure(figsize=(20,6))
+shrink=0.8
+axes = plt.subplot(1, 3, 1, projection=proj)
+axes.set_extent(extent_val, proj)
+fig = ndwi[::10, ::10].plot.imshow( extent=extent_val, transform=proj, cmap=plt.cm.BrBG,robust=True,cbar_kwargs = { 'shrink':shrink})
+#axes.coastlines(resolution='10m',linewidth=1)
+axes.set_title('Sentinel 2, NDWI')
+
+axes = plt.subplot(1, 3, 2, projection=proj)
+water = water_mask(ndwi,  0.2)
+axes.set_extent(extent_val, proj)
+water[ ::10, ::10].plot.imshow( extent=extent_val, transform=proj, cmap=bcmap, cbar_kwargs={'ticks': [0,1],'shrink':shrink})
+axes.set_title('0.2 < NDWI')
+
+axes = plt.subplot(1, 3, 3, projection=proj)
+water = water_mask(ndwi,  0.)
+axes.set_extent(extent_val, proj)
+water[ ::10, ::10].plot.imshow( extent=extent_val, transform=proj, cmap=bcmap, cbar_kwargs={'ticks': [0,1],'shrink':shrink})
+axes.set_title('0. < NDWI')
+
+plt.savefig('./fig/example_ndwi_mask.png',dpi=300)
+
+plt.show()
 
 plt.figure()
-fig = new_ang.scat_ang.plot(col='band', cmap=cmap,col_wrap=4,robust=True,aspect=1)
+fig = new_ang.scat_ang.plot(col='band', cmap=cmap,col_wrap=4,aspect=1.15,robust=True)
 for ax in fig.axes.flat:
     ax.set(xticks=[], yticks=[])
     ax.set_ylabel('')
     ax.set_xlabel('')
 plt.savefig('./fig/example_scattering_angle_all_bands.png',dpi=300)
-plt.show()
+#plt.show()
 
 
