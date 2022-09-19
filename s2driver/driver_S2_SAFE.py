@@ -8,15 +8,10 @@ from numba import jit
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from mpl_toolkits.axes_grid1.inset_locator import zoomed_inset_axes, mark_inset
-
-# mpl.use('TkAgg')
-from osgeo import gdal, ogr
 import scipy.odr as odr
 
-# import rasterio as rio
+from osgeo import gdal, ogr
+import cartopy.crs as ccrs
 import eoreader as eo
 from eoreader.reader import Reader
 
@@ -65,10 +60,17 @@ class s2image():
         prod = reader.open(imageSAFE, remove_tmp=True)
         self.prod = prod
         self.processing_baseline = prod._processing_baseline
+
+        # save geographic data
         self.extent = prod.extent()
         self.bounds = self.extent.bounds
         minx, miny, maxx, maxy = self.bounds.values[0]
         self.crs = self.prod.crs()
+        self.epsg = self.extent.crs.to_epsg()
+        str_epsg = str(self.epsg)
+        zone = str_epsg[-2:]
+        is_south = str_epsg[2] == 7
+        self.proj = ccrs.UTM(zone, is_south)
 
         # -------------------------
         # interpolation
