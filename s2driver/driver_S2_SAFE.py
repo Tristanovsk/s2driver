@@ -8,8 +8,10 @@ from numba import jit
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
-import scipy.odr as odr
 
+from rasterio.features import rasterize
+import scipy.odr as odr
+from affine import Affine
 from osgeo import gdal, ogr
 import cartopy.crs as ccrs
 import eoreader as eo
@@ -23,14 +25,22 @@ BAND_NAMES_EOREADER = np.array(['CA', 'BLUE', 'GREEN', 'RED', 'VRE_1',
 
 BAND_ID = [b.replace('B', '') for b in BAND_NAMES]
 NATIVE_RESOLUTION = [60, 10, 10, 10, 20, 20, 20, 10, 20, 60, 60, 20, 20]
+WAVELENGTH=[443,490,560,665,705,740,783,842,865,945,1375,1610,2190]
+BAND_WIDTH=[20,65,35,30,15,15,20,115,20,20,30,90,180]
 
+INFO = pd.DataFrame({'bandId':range(13),
+              'ESA':BAND_NAMES,
+              'EOREADER':BAND_NAMES_EOREADER,
+              'Wavelength (nm)':WAVELENGTH,
+              'Band width (nm)':BAND_WIDTH,
+              'Resolution (m)':NATIVE_RESOLUTION}).set_index('bandId').T
 
 class s2image():
-    def __init__(self, imageSAFE, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12], resolution=60):
+    def __init__(self, imageSAFE, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12], resolution=60, verbose=False):
 
         abspath = os.path.abspath(imageSAFE)
         dirroot, basename = os.path.split(abspath)
-
+        self.verbose = verbose
         self.band_idx = band_idx
         self.resolution = resolution
 
@@ -71,6 +81,7 @@ class s2image():
         zone = str_epsg[-2:]
         is_south = str_epsg[2] == 7
         self.proj = ccrs.UTM(zone, is_south)
+        self.transform = Affine(resolution, 0., minx, 0., -resolution, maxy)
 
         # -------------------------
         # interpolation
@@ -235,7 +246,7 @@ class s2image():
                 # compression using simple int8 and scale factor
                 arr[ii, jj] = (val * scale_factor)
 
-    def data_fitting(self, x0, y0, arr, verbose=False):
+    def data_fitting(self, x0, y0, arr):
         # ---------------------------------
         # ODR multilinear regression
         # ---------------------------------
@@ -263,26 +274,42 @@ class s2image():
         fit = odr.ODR(data, linear, beta0=beta0)
         resfit = fit.run()
 
-        if verbose:
+        if self.verbose:
             resfit.pprint()
 
         return resfit.beta
 
-    def get_band_angle_as_numpy(self, xarr, bandId=0, resolution=20, detector_mask_name='DETFOO', compress=False,
-                                verbose=True):
+    def get_detector_mask(self, bandId=0, resolution=20, detector_mask_name='DETFOO'):
+
+        if self.processing_baseline < 4:
+            mask_df = self._open_mask(detector_mask_name, BAND_ID[bandId])
+            detector_num = mask_df.gml_id.str.split('-', expand=True).values[:, 2]
+            poly_shp = [[geom, int(value)] for geom, value in zip(mask_df.geometry, detector_num)]
+
+            mask = rasterize(shapes=poly_shp,
+                             out_shape=(self.height, self.width),
+                             transform=self.transform)
+        else:
+
+            mask = self._open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution).astype(np.int8)
+            mask = mask.squeeze()
+        return np.array(mask)
+
+    def get_band_angle_as_numpy(self, xarr, bandId=0, resolution=20,
+                                detector_mask_name='DETFOO', compress=False,
+                                ):
         '''
 
         :param xarr:
         :param bandId:
         :param resolution:
         :param detector_mask_name:
-        :param verbose:
+
         :return:
         '''
-        # xarr = view_ang.vza
+
         detector_offset = xarr.detectorId.values.min()
-        mask = self._open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution).astype(np.int8)
-        mask = mask.squeeze()
+        mask = self.get_detector_mask(bandId=bandId, resolution=resolution)
 
         # TODO check how to avoid taking the nodata value "0" when coarsening the raster
         # TODO for the moment this induces bad detector number at the edge of the image swath
@@ -295,7 +322,7 @@ class s2image():
         # # compress mask into int8
         # mask = mask.astype(np.int8)
 
-        x, y = mask.x.values, mask.y.values
+        x, y = self.new_x, self.new_y
         self.prod.clear()
         betas = np.full((self.detector_num, 3), np.nan)
         xarr_ = xarr.sel(bandId=bandId)
@@ -305,19 +332,19 @@ class s2image():
             # --------------------------------------------------------------
             arr = xarr_.isel(detectorId=id).dropna('y', how='all').dropna('x', how='all')
             x0, y0 = arr.x.values, arr.y.values
-            betas[id, :] = self.data_fitting(x0, y0, arr, verbose=verbose)
+            betas[id, :] = self.data_fitting(x0, y0, arr)
 
         if compress:
             # TODO experimental, needs to be tested
             # compression in uint16 (NB: range 0-65535)
             new_arr = np.full((self.width, self.height), np.nan, dtype=np.int16)
             # compute angles from betas values for each detector and band
-            self.lin2D(new_arr, x, y, mask.__array__(), betas, detector_offset=detector_offset, scale_factor=100)
+            self.lin2D(new_arr, x, y, mask, betas, detector_offset=detector_offset, scale_factor=100)
         else:
             # compression in uint16 (NB: range 0-65535)
             new_arr = np.full((self.width, self.height), np.nan, dtype=np.float32)
             # compute angles from betas values for each detector and band
-            self.lin2D(new_arr, x, y, mask.__array__(), betas, detector_offset=detector_offset, scale_factor=1)
+            self.lin2D(new_arr, x, y, mask, betas, detector_offset=detector_offset, scale_factor=1)
 
         del mask
         return new_arr
@@ -362,7 +389,8 @@ class s2image():
 
         new_vza, new_vazi = [], []
         for ibandId, bandId in enumerate(band_idx):
-            print(bandId)
+            if self.verbose:
+                print('Band number '+str(bandId)+' is being loaded')
             new_vza.append(self.get_band_angle_as_numpy(raw_vza, bandId=bandId, resolution=self.resolution))
             new_vazi.append(self.get_band_angle_as_numpy(raw_vazi, bandId=bandId, resolution=self.resolution))
         vazi = xr.Dataset(data_vars=dict(vazi=(['bandID', 'y', 'x'], np.array(new_vazi))),

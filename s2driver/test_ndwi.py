@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
+
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import cartopy.crs as ccrs
@@ -19,10 +20,10 @@ cmap = mpl.colors.LinearSegmentedColormap.from_list("",
                                                      'gray', 'yellowgreen', 'forestgreen', 'orange', 'red'])
 opj = os.path.join
 imageSAFE = '/sat_data/satellite/sentinel2/L1C/31TFJ/S2A_MSIL1C_20201004T104031_N0209_R008_T31TFJ_20201004T125253.SAFE'
-imageSAFE = '/sat_data/satellite/sentinel2/L1C/31TFJ/S2B_MSIL1C_20220731T103629_N0400_R008_T31TFJ_20220731T124834.SAFE'
+#imageSAFE = '/sat_data/satellite/sentinel2/L1C/31TFJ/S2B_MSIL1C_20220731T103629_N0400_R008_T31TFJ_20220731T124834.SAFE'
 
 
-l1c = dS2.s2image(imageSAFE,band_idx=[2,8],resolution=20)
+l1c = dS2.s2image(imageSAFE,band_idx=[2,8,9,10],resolution=20)
 
 # -----------------
 # load angles
@@ -57,10 +58,7 @@ def water_mask(ndwi, threshold=0):
 coarsening = 1
 
 # plot geometry
-plt.figure()
-axes = plt.subplot(1, 1, 1, projection=proj)
-axes.set_extent(extent_val, proj)
-fig = l1c.geom.razi.plot.imshow(col='bandID', cmap=cmap, col_wrap=4,extent=extent_val, transform=proj, aspect=1.15, robust=True)
+fig = l1c.geom.razi.plot.imshow(col='bandID', cmap=cmap, col_wrap=4, aspect=1.15, robust=True)
 for ax in fig.axes.flat:
     ax.set(xticks=[], yticks=[])
     ax.set_ylabel('')
@@ -97,12 +95,11 @@ plt.show()
 
 
 plt.figure()
-fig = l1c.bands[:, ::10, ::10].plot.imshow(transform=ccrs.PlateCarree(),extent=extent_val,subplot_kws={'projection': proj, },
+p = l1c.bands[:, ::10, ::10].plot.imshow(subplot_kws=dict(projection= proj),
                                     col='bandID', col_wrap=4,  robust=True, cmap=plt.cm.binary_r)
+for ax in p.axes.flat:
+    #ax.coastlines()
+    ax.set_extent(extent_val,proj)
 plt.show()
-for ax in fig.axes.flat:
-    ax.set(xticks=[], yticks=[])
-    ax.set_ylabel('')
-    ax.set_xlabel('')
 #plt.savefig('./fig/example_reflectance_all_bands.png', dpi=300)
 
