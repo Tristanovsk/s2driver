@@ -36,7 +36,7 @@ INFO = pd.DataFrame({'bandId':range(13),
               'Resolution (m)':NATIVE_RESOLUTION}).set_index('bandId').T
 
 class s2image():
-    def __init__(self, imageSAFE, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12], resolution=60, verbose=False):
+    def __init__(self, imageSAFE, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12], resolution=60, verbose=False,**kwargs):
 
         abspath = os.path.abspath(imageSAFE)
         dirroot, basename = os.path.split(abspath)
@@ -66,8 +66,9 @@ class s2image():
 
         # Open instance of eoreader
         reader = Reader()
+
         # Open the product
-        prod = reader.open(imageSAFE, remove_tmp=True)
+        prod = reader.open(imageSAFE, remove_tmp=True,**kwargs)
         self.prod = prod
         self.processing_baseline = prod._processing_baseline
 
@@ -100,12 +101,12 @@ class s2image():
         else:
             self._open_mask = prod._open_mask_gt_4_0
 
-    def load_bands(self):
+    def load_bands(self,**kwargs):
         # ----------------------------------
         # getting bands
         # ----------------------------------
 
-        bands = self.prod.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution)
+        bands = self.prod.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution,**kwargs)
         bands = bands.rename({'z': 'bandID'})
         self.bands = bands.assign_coords(bandID=list(BAND_NAMES[self.band_idx]))
         self.prod.clear()
