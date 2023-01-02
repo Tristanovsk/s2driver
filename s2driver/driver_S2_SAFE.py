@@ -25,7 +25,7 @@ BAND_NAMES_EOREADER = np.array(['CA', 'BLUE', 'GREEN', 'RED', 'VRE_1',
 
 BAND_ID = [b.replace('B', '') for b in BAND_NAMES]
 NATIVE_RESOLUTION = [60, 10, 10, 10, 20, 20, 20, 10, 20, 60, 60, 20, 20]
-WAVELENGTH=[443,490,560,665,705,740,783,842,865,945,1375,1610,2190]
+WAVELENGTH=np.array([443,490,560,665,705,740,783,842,865,945,1375,1610,2190])
 BAND_WIDTH=[20,65,35,30,15,15,20,115,20,20,30,90,180]
 
 INFO = pd.DataFrame({'bandId':range(13),
@@ -43,6 +43,7 @@ class s2image():
         self.verbose = verbose
         self.band_idx = band_idx
         self.resolution = resolution
+        self.INFO = INFO[band_idx]
 
         # --------------------------------
         # define interpolation parameters
@@ -71,6 +72,7 @@ class s2image():
         prod = reader.open(imageSAFE, remove_tmp=True,**kwargs)
         self.prod = prod
         self.processing_baseline = prod._processing_baseline
+        self.datetime = prod.datetime
 
         # save geographic data
         self.extent = prod.extent()
@@ -101,14 +103,23 @@ class s2image():
         else:
             self._open_mask = prod._open_mask_gt_4_0
 
-    def load_bands(self,**kwargs):
+    def load_bands(self,add_time=True,**kwargs):
+
         # ----------------------------------
         # getting bands
         # ----------------------------------
-
         bands = self.prod.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution,**kwargs)
         bands = bands.rename({'z': 'bandID'})
-        self.bands = bands.assign_coords(bandID=list(BAND_NAMES[self.band_idx]))
+
+        # ----------------------------------
+        # setting up coordinates and dimensions
+        # ----------------------------------
+        bands = bands.assign_coords(bandID=self.INFO.loc['ESA'].values)
+        self.bands = bands.assign_coords(wl=('bandID',self.INFO.loc['Wavelength (nm)'])).swap_dims({'bandID':'wl'})
+
+        # add time
+        if add_time:
+             self.bands = self.bands.assign_coords(time=self.datetime).expand_dims('time')
         self.prod.clear()
 
     @staticmethod

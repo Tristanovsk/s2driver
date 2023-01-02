@@ -4,7 +4,7 @@
 from setuptools import setup, find_packages
 
 __package__ = 's2driver'
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 
 setup(
     name=__package__,
@@ -26,7 +26,7 @@ setup(
     install_requires=['numpy', 'scipy', 'pandas', 'xarray',
                       'matplotlib', 'rasterio', 'osgeo','cartopy',
                       'numba','eoreader',
-                      'geopandas','affine','shapely' ],
+                      'geopandas','affine','shapely','memory_profiler' ],
 
     entry_points={
         'console_scripts': [
