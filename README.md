@@ -1,6 +1,13 @@
 # s2driver package
 ## Tool for easy loading of Sentinel-2 L1C SAFE format with accurate computation of the viewing angles
 
+# Installation
+### please use conda environment
+conda activate "name of your conda env"
+
+conda install numba rasterio
+
+python setup.py install
 
 ## Example
 ![example gif](illustration/s2driver_visual_tool_optimized.gif)

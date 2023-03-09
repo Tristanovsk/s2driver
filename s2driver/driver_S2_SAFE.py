@@ -103,7 +103,7 @@ class s2image():
         else:
             self._open_mask = prod._open_mask_gt_4_0
 
-    def load_bands(self,add_time=True,**kwargs):
+    def load_bands(self,add_time=False,**kwargs):
 
         # ----------------------------------
         # getting bands
@@ -114,8 +114,9 @@ class s2image():
         # ----------------------------------
         # setting up coordinates and dimensions
         # ----------------------------------
-        bands = bands.assign_coords(bandID=self.INFO.loc['ESA'].values)
-        self.bands = bands.assign_coords(wl=('bandID',self.INFO.loc['Wavelength (nm)'])).swap_dims({'bandID':'wl'})
+        self.bands = bands.assign_coords(wl=('bandID',self.INFO.loc['Wavelength (nm)'])).\
+            swap_dims({'bandID':'wl'}).drop({'band','bandID', 'variable'})
+        self.bands = self.bands.assign_coords(bandID=('wl',self.INFO.loc['ESA'].values))
 
         # add time
         if add_time:
