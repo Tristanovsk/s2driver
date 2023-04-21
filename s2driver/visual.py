@@ -3,8 +3,6 @@ import os
 import numpy as np
 import pandas as pd
 
-import cartopy.crs as ccrs
-
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 # mpl.use('TkAgg')

@@ -8,12 +8,14 @@ from numba import jit
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
+import xmltodict
 
 from rasterio.features import rasterize
 import scipy.odr as odr
 from affine import Affine
 from osgeo import gdal, ogr
 import cartopy.crs as ccrs
+from pyproj import CRS
 import eoreader as eo
 from eoreader.reader import Reader
 
@@ -25,18 +27,20 @@ BAND_NAMES_EOREADER = np.array(['CA', 'BLUE', 'GREEN', 'RED', 'VRE_1',
 
 BAND_ID = [b.replace('B', '') for b in BAND_NAMES]
 NATIVE_RESOLUTION = [60, 10, 10, 10, 20, 20, 20, 10, 20, 60, 60, 20, 20]
-WAVELENGTH=np.array([443,490,560,665,705,740,783,842,865,945,1375,1610,2190])
-BAND_WIDTH=[20,65,35,30,15,15,20,115,20,20,30,90,180]
+WAVELENGTH = np.array([443, 490, 560, 665, 705, 740, 783, 842, 865, 945, 1375, 1610, 2190])
+BAND_WIDTH = [20, 65, 35, 30, 15, 15, 20, 115, 20, 20, 30, 90, 180]
 
-INFO = pd.DataFrame({'bandId':range(13),
-              'ESA':BAND_NAMES,
-              'EOREADER':BAND_NAMES_EOREADER,
-              'Wavelength (nm)':WAVELENGTH,
-              'Band width (nm)':BAND_WIDTH,
-              'Resolution (m)':NATIVE_RESOLUTION}).set_index('bandId').T
+INFO = pd.DataFrame({'bandId': range(13),
+                     'ESA': BAND_NAMES,
+                     'EOREADER': BAND_NAMES_EOREADER,
+                     'Wavelength (nm)': WAVELENGTH,
+                     'Band width (nm)': BAND_WIDTH,
+                     'Resolution (m)': NATIVE_RESOLUTION}).set_index('bandId').T
+
 
 class s2image():
-    def __init__(self, imageSAFE, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12], resolution=60, verbose=False,**kwargs):
+    def __init__(self, imageSAFE, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                 resolution=20, verbose=False, **kwargs):
 
         abspath = os.path.abspath(imageSAFE)
         dirroot, basename = os.path.split(abspath)
@@ -64,12 +68,39 @@ class s2image():
         # get metadata and angle file
         ds = gdal.Open(self.xml_file)
         self.metadata = ds.GetMetadata()
+        self.metadata2 = xmltodict.parse(ds.GetMetadata('xml:SENTINEL2')[0])
+        __ = []
+        for _ in self.metadata2['n1:Level-1C_User_Product']['n1:General_Info']['Product_Image_Characteristics'][
+            'Reflectance_Conversion']['Solar_Irradiance_List']['SOLAR_IRRADIANCE']:
+            __.append([int(_['@bandId']), float(_['#text'])])
+        self.solar_irradiance = np.array(__)
+
+        # Spectral Response Functions
+        SRFs = []
+        wl_hr = np.arange(400, 2350)
+        for _ in self.metadata2['n1:Level-1C_User_Product'][
+            'n1:General_Info']['Product_Image_Characteristics']['Spectral_Information_List']['Spectral_Information']:
+
+            bandID = int(_['@bandId'])
+            if not self.band_idx.__contains__(bandID):
+                continue
+
+            wl_min, wl_max = float(_['Wavelength']['MIN']['#text']), float(_['Wavelength']['MAX']['#text'])
+            step = float(_['Spectral_Response']['STEP']['#text'])
+            wl = np.arange(wl_min, wl_max + step, step)
+            RSF = np.asarray(_['Spectral_Response']['VALUES'].split(), dtype=np.float32)
+            SRFs.append(xr.DataArray(RSF, coords=dict(wl_hr=wl), name='SRF').interp(wl_hr=wl_hr).assign_coords(
+                dict(wl=WAVELENGTH[bandID])))
+        self.SRFs = xr.concat(SRFs, dim='wl')
+        self.SRFs.attrs['description'] = 'Spectral response function of each band'
+
+
 
         # Open instance of eoreader
         reader = Reader()
 
         # Open the product
-        prod = reader.open(imageSAFE, remove_tmp=True,**kwargs)
+        prod = reader.open(imageSAFE, remove_tmp=True, **kwargs)
         self.prod = prod
         self.processing_baseline = prod._processing_baseline
         self.datetime = prod.datetime
@@ -84,6 +115,7 @@ class s2image():
         zone = str_epsg[-2:]
         is_south = str_epsg[2] == 7
         self.proj = ccrs.UTM(zone, is_south)
+        # self.proj = CRS.from_dict({'proj': 'utm', 'zone': zone, 'south': is_south})
         self.transform = Affine(resolution, 0., minx, 0., -resolution, maxy)
 
         # -------------------------
@@ -103,25 +135,38 @@ class s2image():
         else:
             self._open_mask = prod._open_mask_gt_4_0
 
-    def load_bands(self,add_time=False,**kwargs):
+    def load_product(self, add_time=False, **kwargs):
+
+        self.load_bands(add_time=False, **kwargs)
+        self.load_geom()
+        self.prod.attrs = self.metadata
+        self.prod.attrs['satellite'] = self.prod.attrs['PRODUCT_URI'].split('_')[0]
+        self.prod.attrs['solar_irradiance'] = self.solar_irradiance[:, 1]
+        self.prod.attrs['solar_irradiance_unit'] = 'W/m²/µm'
+        self.prod.attrs['acquisition_date'] = self.prod.attrs['DATATAKE_1_DATATAKE_SENSING_START']
+        # add spectral response function
+        self.prod=xr.merge([self.prod, self.SRFs]).drop_vars('bandID')
+
+    def load_bands(self, add_time=False, **kwargs):
 
         # ----------------------------------
         # getting bands
         # ----------------------------------
-        bands = self.prod.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution,**kwargs)
+        bands = self.prod.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution, **kwargs)
         bands = bands.rename({'z': 'bandID'})
 
         # ----------------------------------
         # setting up coordinates and dimensions
         # ----------------------------------
-        self.bands = bands.assign_coords(wl=('bandID',self.INFO.loc['Wavelength (nm)'])).\
-            swap_dims({'bandID':'wl'}).drop({'band','bandID', 'variable'})
-        self.bands = self.bands.assign_coords(bandID=('wl',self.INFO.loc['ESA'].values))
+        self.prod = bands.assign_coords(wl=('bandID', self.INFO.loc['Wavelength (nm)'])). \
+            swap_dims({'bandID': 'wl'}).drop({'band', 'bandID', 'variable'})
+        self.prod = self.prod.assign_coords(bandID=('wl', self.INFO.loc['ESA'].values))
+        self.prod = self.prod.to_dataset(name='bands', promote_attrs=True)
 
         # add time
         if add_time:
-             self.bands = self.bands.assign_coords(time=self.datetime).expand_dims('time')
-        self.prod.clear()
+            self.prod = self.prod.assign_coords(time=self.datetime).expand_dims('time')
+        # self.prod.clear()
 
     @staticmethod
     def parse_angular_grid_node(node):
@@ -201,43 +246,8 @@ class s2image():
 
     def load_geom(self, method='linear'):
 
-        # mask_names = eo.products.optical.s2_product.S2GmlMasks.list_values()
-        # mask_names = ['DETFOO']
-        # masks_ = []
-        # for mask_name in mask_names:
-        #     for i, id in enumerate(BAND_ID):
-        #         print(id, mask_name)
-        #         try:
-        #             mask_ = _open_mask(mask_name, id, res=res).astype(np.int8)
-        #             mask_.assign_coords(bandID=[id])
-        #             prod.clear()
-        #         except:
-        #             break
-        #         if len(mask_) == 0:
-        #             continue
-        #         masks_.append(mask_)
-        #
-        #         name = mask_.gml_id.str.replace('detector_footprint-', '')
-        #         name = name.str.split('-', expand=True).values
-        #         detectorId = (name[:, 2]).astype(int)
-        #         mask_['bandId'], mask_['detectorId'] = name[:, 0], detectorId
-        #         mask_ = mask_.set_index(['bandId', 'detectorId'])
-        #         masks_.append(mask_['geometry'])
-        #
-        # detector_num = np.max(detectorId) + 1
-        # masks = pd.concat(masks_)
-        # xrmasks = masks.to_xarray()
-        # plt.plot(*masks.geometry.isel(bandID=0).values[4].exterior.xy)
         self.get_raw_angles()
-        self.geom = self.get_all_band_angles(method=method)
-
-        # subds = ds.GetMetadata('SUBDATASETS')
-        #
-        # for i in range(4):
-        #     gdal.ErrorReset()
-        #     ds = gdal.Open(subds['SUBDATASET_%d_NAME' % (i + 1)])
-        #     assert ds is not None and gdal.GetLastErrorMsg() == '', \
-        #         subds['SUBDATASET_%d_NAME' % (i + 1)]
+        self.get_all_band_angles(method=method)
 
     @staticmethod
     def linfit(beta, x):
@@ -336,7 +346,7 @@ class s2image():
         # mask = mask.astype(np.int8)
 
         x, y = self.new_x, self.new_y
-        self.prod.clear()
+        # self.prod.clear()
         betas = np.full((self.detector_num, 3), np.nan)
         xarr_ = xarr.sel(bandId=bandId)
         for id in range(self.detector_num):
@@ -403,22 +413,32 @@ class s2image():
         new_vza, new_vazi = [], []
         for ibandId, bandId in enumerate(band_idx):
             if self.verbose:
-                print('Band number '+str(bandId)+' is being loaded')
+                print('Band number ' + str(bandId) + ' is being loaded')
             new_vza.append(self.get_band_angle_as_numpy(raw_vza, bandId=bandId, resolution=self.resolution))
             new_vazi.append(self.get_band_angle_as_numpy(raw_vazi, bandId=bandId, resolution=self.resolution))
-        vazi = xr.Dataset(data_vars=dict(vazi=(['bandID', 'y', 'x'], np.array(new_vazi))),
-                          coords=dict(bandID=BAND_NAMES[band_idx], x=new_x, y=new_y))
-        new_ang = xr.Dataset(data_vars=dict(vza=(['bandID', 'y', 'x'], np.array(new_vza))),
-                             coords=dict(bandID=BAND_NAMES[band_idx], x=new_x, y=new_y))
-        new_ang['sza'] = new_sun_ang.sza
-        new_ang['razi'] = vazi.vazi - new_sun_ang.sazi
-        # new_ang['scat_ang'] = scat_angle(new_ang.sza, new_ang.vza, new_ang.razi)
+        raa = (np.array(new_vazi) - new_sun_ang.sazi.values) % 360
 
-        self.set_crs(new_ang, self.crs)
+        self.prod['vza'] = xr.DataArray(np.array(new_vza), dims=['wl', 'y', 'x'])
+        self.prod['raa'] = xr.DataArray(raa, dims=['wl', 'y', 'x'])
+        self.prod['sza'] = xr.DataArray(new_sun_ang.sza.values, dims=['y', 'x'])
+        #
+        # xr.Dataset(data_vars=dict(vza=(['wl', 'y', 'x'], )),
+        #                      coords=dict(wl=self.INFO.loc['Wavelength (nm)'],
+        #
+        # vazi = xr.Dataset(data_vars=dict(vazi=(['wl', 'y', 'x'], np.array(new_vazi))),
+        #                   coords=dict(wl=self.INFO.loc['Wavelength (nm)'], x=new_x, y=new_y))
+        # new_ang = xr.Dataset(data_vars=dict(vza=(['wl', 'y', 'x'], np.array(new_vza))),
+        #                      coords=dict(wl=self.INFO.loc['Wavelength (nm)'], x=new_x, y=new_y))
+        #
+        # new_ang['sza'] = new_sun_ang.sza
+        # new_ang['razi'] = vazi.vazi - new_sun_ang.sazi) % 360
+        # # new_ang['scat_ang'] = scat_angle(new_ang.sza, new_ang.vza, new_ang.razi)
 
-        del new_vza, new_vazi, vazi, new_sun_ang
+        # self.set_crs(new_ang, self.crs)
 
-        return new_ang
+        del new_vza, new_vazi, raa, new_sun_ang
+
+        return
 
 # ------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------
