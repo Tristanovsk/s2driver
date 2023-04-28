@@ -94,8 +94,6 @@ class s2image():
         self.SRFs = xr.concat(SRFs, dim='wl')
         self.SRFs.attrs['description'] = 'Spectral response function of each band'
 
-
-
         # Open instance of eoreader
         reader = Reader()
 
@@ -145,7 +143,7 @@ class s2image():
         self.prod.attrs['solar_irradiance_unit'] = 'W/m²/µm'
         self.prod.attrs['acquisition_date'] = self.prod.attrs['DATATAKE_1_DATATAKE_SENSING_START']
         # add spectral response function
-        self.prod=xr.merge([self.prod, self.SRFs]).drop_vars('bandID')
+        self.prod = xr.merge([self.prod, self.SRFs]).drop_vars('bandID')
 
     def load_bands(self, add_time=False, **kwargs):
 
