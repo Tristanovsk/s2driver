@@ -25,8 +25,8 @@ setup(
     # Dependent packages (distributions)
     install_requires=['numpy', 'scipy', 'pandas', 'xarray',
                       'matplotlib', 'rasterio', 'osgeo','cartopy',
-                      'numba','eoreader','xmltodict',
-                      'geopandas','affine','shapely' ],
+                      'numba','eoreader',
+                      'geopandas','affine','shapely','memory_profiler','xmltodict' ],
 
     entry_points={
         'console_scripts': [
