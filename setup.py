@@ -26,7 +26,7 @@ setup(
     install_requires=['numpy', 'scipy', 'pandas', 'xarray',
                       'matplotlib', 'rasterio', 'osgeo','cartopy',
                       'numba','eoreader',
-                      'geopandas','affine','shapely','memory_profiler' ],
+                      'geopandas','affine','shapely','memory_profiler','xmltodict' ],
 
     entry_points={
         'console_scripts': [
