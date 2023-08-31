@@ -4,7 +4,7 @@
 from setuptools import setup, find_packages
 
 __package__ = 's2driver'
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 
 setup(
     name=__package__,
@@ -28,8 +28,8 @@ setup(
                       'numba','eoreader',
                       'geopandas','affine','shapely','memory_profiler','xmltodict' ],
 
-    entry_points={
-        'console_scripts': [
-            's2driver = TODO'
-        ]}
+    # entry_points={
+    #     'console_scripts': [
+    #         's2driver = TODO'
+    #     ]}
 )

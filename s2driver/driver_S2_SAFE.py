@@ -49,6 +49,12 @@ class s2image():
         self.resolution = resolution
         self.INFO = INFO[band_idx]
 
+        #-----------------------------------------------------
+        # define prod and geom where data will be loaded
+        #-----------------------------------------------------
+        self.prod=xr.Dataset()
+        self.geom=xr.Dataset()
+
         # --------------------------------
         # define interpolation parameters
         # --------------------------------
@@ -98,16 +104,16 @@ class s2image():
         reader = Reader()
 
         # Open the product
-        prod = reader.open(imageSAFE, remove_tmp=True, **kwargs)
-        self.prod = prod
-        self.processing_baseline = prod._processing_baseline
-        self.datetime = prod.datetime
+        reader = reader.open(imageSAFE, remove_tmp=True, **kwargs)
+        self.reader = reader
+        self.processing_baseline = reader._processing_baseline
+        self.datetime = reader.datetime
 
         # save geographic data
-        self.extent = prod.extent()
+        self.extent = reader.extent()
         self.bounds = self.extent.bounds
         minx, miny, maxx, maxy = self.bounds.values[0]
-        self.crs = self.prod.crs()
+        self.crs = self.reader.crs()
         self.epsg = self.extent.crs.to_epsg()
         str_epsg = str(self.epsg)
         zone = str_epsg[-2:]
@@ -129,14 +135,15 @@ class s2image():
         # ---------------------------------
         # TODO generalize to load all available masks
         if self.processing_baseline < 4:
-            self._open_mask = prod._open_mask_lt_4_0
+            self._open_mask = reader._open_mask_lt_4_0
         else:
-            self._open_mask = prod._open_mask_gt_4_0
+            self._open_mask = reader._open_mask_gt_4_0
 
     def load_product(self, add_time=False, **kwargs):
 
         self.load_bands(add_time=False, **kwargs)
         self.load_geom()
+        self.prod = xr.merge([self.prod, self.geom])
         self.prod.attrs = self.metadata
         self.prod.attrs['satellite'] = self.prod.attrs['PRODUCT_URI'].split('_')[0]
         self.prod.attrs['solar_irradiance'] = self.solar_irradiance[:, 1]
@@ -150,14 +157,16 @@ class s2image():
         # ----------------------------------
         # getting bands
         # ----------------------------------
-        bands = self.prod.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution, **kwargs)
-        bands = bands.rename({'z': 'bandID'})
+        bands = self.reader.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution, **kwargs)
+        # fix for naming in differnt EOreader versions
+        if 'z' in bands.coords:
+            bands = bands.rename({'z': 'bands'})
 
         # ----------------------------------
         # setting up coordinates and dimensions
         # ----------------------------------
-        self.prod = bands.assign_coords(wl=('bandID', self.INFO.loc['Wavelength (nm)'])). \
-            swap_dims({'bandID': 'wl'}).drop({'band', 'bandID', 'variable'})
+        self.prod = bands.assign_coords(wl=('bands', self.INFO.loc['Wavelength (nm)'])). \
+            swap_dims({'bands': 'wl'}).drop({'band', 'bands', 'variable'})
         self.prod = self.prod.assign_coords(bandID=('wl', self.INFO.loc['ESA'].values))
         self.prod = self.prod.to_dataset(name='bands', promote_attrs=True)
 
@@ -216,9 +225,8 @@ class s2image():
         Nband, Ndetector = np.max(bandIds) + 1, np.max(detectorIds) + 1
 
         # allocate/fill rasters
-        vza, vazi = np.full((Nband, Ndetector, Nx, Ny), np.nan, dtype=float), np.full((Nband, Ndetector, Nx, Ny),
-                                                                                      np.nan,
-                                                                                      dtype=float)
+        vza = np.full((Nband, Ndetector, Nx, Ny), np.nan, dtype=float)
+        vazi = np.full((Nband, Ndetector, Nx, Ny), np.nan, dtype=float)
 
         for angleID in root.findall('.//Tile_Angles/Viewing_Incidence_Angles_Grids'):
             iband = int(angleID.attrib['bandId'])
@@ -311,8 +319,8 @@ class s2image():
                              out_shape=(self.height, self.width),
                              transform=self.transform)
         else:
-
-            mask = self._open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution).astype(np.int8)
+            # TODO deprecate 'resolution' argument, 'pixel_size' is used instead since EOReader 0.20
+            mask = self._open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution,pixel_size=resolution).astype(np.int8)
             mask = mask.squeeze()
         return np.array(mask)
 
@@ -416,9 +424,9 @@ class s2image():
             new_vazi.append(self.get_band_angle_as_numpy(raw_vazi, bandId=bandId, resolution=self.resolution))
         raa = (np.array(new_vazi) - new_sun_ang.sazi.values) % 360
 
-        self.prod['vza'] = xr.DataArray(np.array(new_vza), dims=['wl', 'y', 'x'])
-        self.prod['raa'] = xr.DataArray(raa, dims=['wl', 'y', 'x'])
-        self.prod['sza'] = xr.DataArray(new_sun_ang.sza.values, dims=['y', 'x'])
+        self.geom['vza'] = xr.DataArray(np.array(new_vza), dims=['wl', 'y', 'x'])
+        self.geom['raa'] = xr.DataArray(raa, dims=['wl', 'y', 'x'])
+        self.geom['sza'] = xr.DataArray(new_sun_ang.sza.values, dims=['y', 'x'])
         #
         # xr.Dataset(data_vars=dict(vza=(['wl', 'y', 'x'], )),
         #                      coords=dict(wl=self.INFO.loc['Wavelength (nm)'],
