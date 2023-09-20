@@ -22,7 +22,7 @@ from eoreader.reader import Reader
 opj = os.path.join
 BAND_NAMES = np.array(['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B10', 'B11', 'B12'])
 BAND_NAMES_EOREADER = np.array(['CA', 'BLUE', 'GREEN', 'RED', 'VRE_1',
-                                'VRE_2', 'VRE_3', 'NARROW_NIR', 'NIR',
+                                'VRE_2', 'VRE_3', 'NIR', 'NARROW_NIR',
                                 'WV', 'SWIR_CIRRUS', 'SWIR_1', 'SWIR_2'])
 
 BAND_ID = [b.replace('B', '') for b in BAND_NAMES]
@@ -38,22 +38,27 @@ INFO = pd.DataFrame({'bandId': range(13),
                      'Resolution (m)': NATIVE_RESOLUTION}).set_index('bandId').T
 
 
-class s2image():
-    def __init__(self, imageSAFE, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-                 resolution=20, verbose=False, **kwargs):
+class sentinel2_driver():
+    def __init__(self, imageSAFE,
+                 band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                 band_tbp_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12],
+                 resolution=20,
+                 verbose=False,
+                 **kwargs):
 
         abspath = os.path.abspath(imageSAFE)
         dirroot, basename = os.path.split(abspath)
         self.verbose = verbose
         self.band_idx = band_idx
+        self.band_tbp_idx = band_tbp_idx
         self.resolution = resolution
         self.INFO = INFO[band_idx]
 
-        #-----------------------------------------------------
+        # -----------------------------------------------------
         # define prod and geom where data will be loaded
-        #-----------------------------------------------------
-        self.prod=xr.Dataset()
-        self.geom=xr.Dataset()
+        # -----------------------------------------------------
+        self.prod = xr.Dataset()
+        self.geom = xr.Dataset()
 
         # --------------------------------
         # define interpolation parameters
@@ -94,8 +99,8 @@ class s2image():
             wl_min, wl_max = float(_['Wavelength']['MIN']['#text']), float(_['Wavelength']['MAX']['#text'])
             step = float(_['Spectral_Response']['STEP']['#text'])
             wl = np.arange(wl_min, wl_max + step, step)
-            RSF = np.asarray(_['Spectral_Response']['VALUES'].split(), dtype=np.float32)
-            SRFs.append(xr.DataArray(RSF, coords=dict(wl_hr=wl), name='SRF').interp(wl_hr=wl_hr).assign_coords(
+            SRF = np.asarray(_['Spectral_Response']['VALUES'].split(), dtype=np.float32)
+            SRFs.append(xr.DataArray(SRF, coords=dict(wl_hr=wl), name='SRF').interp(wl_hr=wl_hr).assign_coords(
                 dict(wl=WAVELENGTH[bandID])))
         self.SRFs = xr.concat(SRFs, dim='wl')
         self.SRFs.attrs['description'] = 'Spectral response function of each band'
@@ -115,10 +120,10 @@ class s2image():
         minx, miny, maxx, maxy = self.bounds.values[0]
         self.crs = self.reader.crs()
         self.epsg = self.extent.crs.to_epsg()
-        str_epsg = str(self.epsg)
-        zone = str_epsg[-2:]
-        is_south = str_epsg[2] == 7
-        self.proj = ccrs.UTM(zone, is_south)
+        # str_epsg = str(self.epsg)
+        # zone = str_epsg[-2:]
+        # is_south = str_epsg[2] == 7
+        # self.proj = ccrs.UTM(zone, is_south)
         # self.proj = CRS.from_dict({'proj': 'utm', 'zone': zone, 'south': is_south})
         self.transform = Affine(resolution, 0., minx, 0., -resolution, maxy)
 
@@ -139,20 +144,27 @@ class s2image():
         else:
             self._open_mask = reader._open_mask_gt_4_0
 
-    def load_product(self, add_time=False, **kwargs):
+    def load_product(self,
+                     add_time=False,
+                     **kwargs):
 
         self.load_bands(add_time=False, **kwargs)
         self.load_geom()
         self.prod = xr.merge([self.prod, self.geom])
-        self.prod.attrs = self.metadata
+
+        # add native metadata
+        for item in self.metadata:
+            self.prod.attrs[item] = self.metadata[item]
+
         self.prod.attrs['satellite'] = self.prod.attrs['PRODUCT_URI'].split('_')[0]
         self.prod.attrs['solar_irradiance'] = self.solar_irradiance[:, 1]
         self.prod.attrs['solar_irradiance_unit'] = 'W/m²/µm'
         self.prod.attrs['acquisition_date'] = self.prod.attrs['DATATAKE_1_DATATAKE_SENSING_START']
-        # add spectral response function
-        self.prod = xr.merge([self.prod, self.SRFs]).drop_vars('bandID')
 
-    def load_bands(self, add_time=False, **kwargs):
+
+    def load_bands(self,
+                   add_time=False,
+                   **kwargs):
 
         # ----------------------------------
         # getting bands
@@ -169,6 +181,19 @@ class s2image():
             swap_dims({'bands': 'wl'}).drop({'band', 'bands', 'variable'})
         self.prod = self.prod.assign_coords(bandID=('wl', self.INFO.loc['ESA'].values))
         self.prod = self.prod.to_dataset(name='bands', promote_attrs=True)
+        self.prod.attrs['wl_to_process'] = WAVELENGTH[self.band_tbp_idx]
+
+        # add spectral response function
+        self.prod = xr.merge([self.prod, self.SRFs.sel(wl=self.prod.wl.values)]).drop_vars('bandID')
+
+        # compute central wavelengths
+        wl_true = []
+        for wl_, srf in self.prod.SRF.groupby('wl'):
+            srf = srf.dropna('wl_hr')
+            wl_true.append((srf.wl_hr * srf).integrate('wl_hr') / srf.integrate('wl_hr'))
+        wl_true = xr.concat(wl_true, dim='wl')
+        wl_true.name = 'wl_true'
+        self.prod = xr.merge([self.prod, wl_true])
 
         # add time
         if add_time:
@@ -320,7 +345,8 @@ class s2image():
                              transform=self.transform)
         else:
             # TODO deprecate 'resolution' argument, 'pixel_size' is used instead since EOReader 0.20
-            mask = self._open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution,pixel_size=resolution).astype(np.int8)
+            mask = self._open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution,
+                                   pixel_size=resolution).astype(np.int8)
             mask = mask.squeeze()
         return np.array(mask)
 
