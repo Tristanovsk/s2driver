@@ -4,10 +4,12 @@
 # Installation
 ### please use conda environment
 conda activate "name of your conda environment"
+
 conda install numba rasterio
+
 conda install gdal
 
-python setup.py install
+pip install .
 
 ## Installation of the missing modules
 
