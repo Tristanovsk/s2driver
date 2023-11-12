@@ -2,6 +2,7 @@ import glob
 import os
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -24,11 +25,40 @@ import colorcet as cc
 import panel as pn
 import panel.widgets as pnw
 import param as pm
-
+from shapely.geometry import Polygon
 from collections import OrderedDict as odict
 
 
-class view_geo():
+
+class utils():
+
+    @staticmethod
+    def get_geom(aoi_stream, crs=4326):
+        geom = aoi_stream.data
+        ys, xs = geom['ys'][-1], geom['xs'][-1]
+        polygon_geom = Polygon(zip(xs, ys))
+        polygon = gpd.GeoDataFrame(index=[0], crs=3857, geometry=[polygon_geom])
+        return polygon.to_crs(crs)
+
+    @staticmethod
+    def custom_hover():
+        formatter_code = """
+          var digits = 4;
+          var projections = Bokeh.require("core/util/projections");
+          var x = special_vars.x; var y = special_vars.y;
+          var coords = projections.wgs84_mercator.invert(x, y);
+          return "" + (Math.round(coords[%d] * 10**digits) / 10**digits).toFixed(digits)+ "";
+        """
+        formatter_code_x, formatter_code_y = formatter_code % 0, formatter_code % 1
+        custom_tooltips = [('Lon', '@x{custom}'), ('Lat', '@y{custom}'), ('Value', '@image{0.0000}')]
+        custom_formatters = {
+            '@x': bokeh.models.CustomJSHover(code=formatter_code_x),
+            '@y': bokeh.models.CustomJSHover(code=formatter_code_y)
+        }
+        return bokeh.models.HoverTool(tooltips=custom_tooltips, formatters=custom_formatters)
+
+
+class view_geo(utils):
     def __init__(self, raster, dates=None,
                  bands=None,
                  reproject=False,
@@ -40,8 +70,8 @@ class view_geo():
         self.key_dimensions = ['x', 'y']
         self.minmaxvalues = minmaxvalues
         self.minmax = minmax
-        self.colormaps = ['CET_D13', 'bky', 'CET_D1A','CET_CBL2','CET_L10','CET_C6s',
-                          'kbc', 'blues_r', 'kb', 'rainbow', 'fire', 'kgy', 'bjy','gray' ]
+        self.colormaps = ['CET_D13', 'bky', 'CET_D1A', 'CET_CBL2', 'CET_L10', 'CET_C6s',
+                          'kbc', 'blues_r', 'kb', 'rainbow', 'fire', 'kgy', 'bjy', 'gray']
         # variables settings
         self.dates = dates
         if dates == None:
@@ -66,6 +96,14 @@ class view_geo():
                     self.dataarrays[itime, iband] = raster_.sel(wl=band).rio.reproject(3857, nodata=np.nan)
                 else:
                     self.dataarrays[itime, iband] = raster_.sel(wl=band)
+
+        # declare streaming object to get Area of Interest (AOI), crs=crs.epsg(3857)
+        self.aoi_polygons = hv.Polygons([]).opts(opts.Polygons(
+            fill_alpha=0.3, fill_color='white',
+            line_width=1.2))  ##, active_tools=['poly_draw']))#.opts(crs.GOOGLE_MERCATOR)
+        self.aoi_stream = hv.streams.PolyDraw(
+            source=self.aoi_polygons, drag=True)  # , num_objects=1)#5,styles={'fill_color': aoi_colours})
+        self.edit_stream = hv.streams.PolyEdit(source=self.aoi_polygons, vertex_style={'color': 'red'})
 
     @staticmethod
     def custom_hover():
@@ -105,7 +143,7 @@ class view_geo():
         bases = [name for name, ts in hv.element.tiles.tile_sources.items()]
         pn_band = pn.widgets.RadioButtonGroup(value=0, options=list(range(len(bands))))
         pn_colormap = pn.widgets.Select(value='CET_D13',
-                                        options=self.colormaps )
+                                        options=self.colormaps)
         pn_opacity = pn.widgets.FloatSlider(name='Opacity', value=0.95, start=0, end=1, step=0.05)
         range_slider = pn.widgets.RangeSlider(name='Range Slider', start=self.minmax[0], end=self.minmax[1],
                                               value=self.minmaxvalues, step=0.0001)
@@ -136,7 +174,8 @@ class view_geo():
             return tiles.options(height=self.height, width=self.width).opts(gopts)
 
         dynmap = hd.regrid(hv.DynamicMap(load_map))
-        combined = hv.DynamicMap(load_tiles) * dynmap
+        combined = (hv.DynamicMap(
+            load_tiles) * dynmap * self.aoi_polygons)
 
         return pn.Column(
             pn.WidgetBox(
