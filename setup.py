@@ -26,8 +26,7 @@ setup(
     install_requires=['numpy', 'scipy', 'pandas', 'xarray',
                       'matplotlib', 'rasterio', 'cartopy',
                       'numba','eoreader',
-                      'geopandas','affine','shapely','memory_profiler','xmltodict' ],
-
+                      'geopandas','affine','shapely','memory_profiler','xmltodict' ,'importlib_resources']
     # entry_points={
     #     'console_scripts': [
     #         's2driver = TODO'
