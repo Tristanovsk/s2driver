@@ -24,7 +24,7 @@ setup(
 
     # Dependent packages (distributions)
     install_requires=['numpy', 'scipy', 'pandas', 'xarray',
-                      'matplotlib', 'rasterio', 'osgeo','cartopy',
+                      'matplotlib', 'rasterio', 'cartopy',
                       'numba','eoreader',
                       'geopandas','affine','shapely','memory_profiler','xmltodict' ],
 
