@@ -17,7 +17,12 @@ from osgeo import gdal, ogr
 import cartopy.crs as ccrs
 from pyproj import CRS
 import eoreader as eo
+
 from eoreader.reader import Reader
+from eoreader.env_vars import USE_DASK
+
+# EOReader uses dask if == 1
+os.environ[USE_DASK] = "0"
 
 opj = os.path.join
 BAND_NAMES = np.array(['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B10', 'B11', 'B12'])
@@ -42,7 +47,9 @@ class sentinel2_driver():
     def __init__(self, imageSAFE,
                  band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
                  band_tbp_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12],
+                 subset=None,
                  resolution=20,
+                 resolution_angle=60,
                  verbose=False,
                  **kwargs):
 
@@ -51,6 +58,8 @@ class sentinel2_driver():
         self.verbose = verbose
         self.band_idx = band_idx
         self.band_tbp_idx = band_tbp_idx
+        self.subset = subset
+        self.resolution_angle = resolution_angle
         self.resolution = resolution
         self.INFO = INFO[band_idx]
 
@@ -66,15 +75,19 @@ class sentinel2_driver():
         # tile for 10m resolution: width,height = 10980,10980
         # tile for 20m resolution: width,height = 5490,5490
         # tile for 60m resolution: width,height = 1830,1830
-        if resolution == 10:
+        if resolution_angle == 10:
             self.width, self.height = 10980, 10980
-        elif resolution == 20:
+        elif resolution_angle == 20:
             self.width, self.height = 5490, 5490
-        elif resolution == 60:
+        elif resolution_angle == 60:
             self.width, self.height = 1830, 1830
-
-        self.xml_granule = glob.glob(opj(imageSAFE, 'GRANULE', '*', 'MTD_TL.xml'))[0]
-        self.xml_file = glob.glob(opj(imageSAFE, 'MTD*.xml'))[0]
+        try:
+            self.xml_granule = glob.glob(opj(imageSAFE, 'GRANULE', '*', 'MTD_TL.xml'))[0]
+            self.xml_file = glob.glob(opj(imageSAFE, 'MTD*.xml'))[0]
+        except:
+            print('old or deprecated SAFE format detected')
+            self.xml_granule = glob.glob(opj(imageSAFE, 'GRANULE', '*', '*MTD*.xml'))[0]
+            self.xml_file = glob.glob(opj(imageSAFE, '*MTD*.xml'))[0]
 
         # get metadata and angle file
         ds = gdal.Open(self.xml_file)
@@ -100,8 +113,9 @@ class sentinel2_driver():
             step = float(_['Spectral_Response']['STEP']['#text'])
             wl = np.arange(wl_min, wl_max + step, step)
             SRF = np.asarray(_['Spectral_Response']['VALUES'].split(), dtype=np.float32)
-            SRFs.append(xr.DataArray(SRF, coords=dict(wl_hr=wl), name='SRF').interp(wl_hr=wl_hr).assign_coords(
-                dict(wl=WAVELENGTH[bandID])))
+            SRFs.append(
+                xr.DataArray(SRF, coords=dict(wl_hr=wl[:len(SRF)]), name='SRF').interp(wl_hr=wl_hr).assign_coords(
+                    dict(wl=WAVELENGTH[bandID])))
         self.SRFs = xr.concat(SRFs, dim='wl')
         self.SRFs.attrs['description'] = 'Spectral response function of each band'
 
@@ -148,28 +162,43 @@ class sentinel2_driver():
                      add_time=False,
                      **kwargs):
 
-        self.load_bands(add_time=False, **kwargs)
+        self.load_bands(subset=self.subset, add_time=add_time, **kwargs)
+
         self.load_geom()
+        #if self.resolution_angle != self.resolution:
+        self.geom=self.geom.interp(x=self.prod.x, y=self.prod.y, method='nearest')
         self.prod = xr.merge([self.prod, self.geom])
+        del self.geom
 
         # add native metadata
         for item in self.metadata:
             self.prod.attrs[item] = self.metadata[item]
 
         self.prod.attrs['satellite'] = self.prod.attrs['PRODUCT_URI'].split('_')[0]
+        self.prod.attrs['tile'] = self.prod.attrs['PRODUCT_URI'].split('_')[5][1:]
         self.prod.attrs['solar_irradiance'] = self.solar_irradiance[:, 1]
         self.prod.attrs['solar_irradiance_unit'] = 'W/m²/µm'
         self.prod.attrs['acquisition_date'] = self.prod.attrs['DATATAKE_1_DATATAKE_SENSING_START']
 
-
-    def load_bands(self,
+    def load_bands(self, subset=None,
                    add_time=False,
                    **kwargs):
 
         # ----------------------------------
         # getting bands
         # ----------------------------------
-        bands = self.reader.stack(list(BAND_NAMES_EOREADER[self.band_idx]), resolution=self.resolution, **kwargs)
+        window=None
+        if subset is not None:
+
+            if subset.dtype == 'geometry':
+                window = subset.to_crs(self.crs).bounds.values[0]
+            else:
+                window = subset[0]
+        bands = self.reader.stack(list(BAND_NAMES_EOREADER[self.band_idx]),
+                                  resolution=self.resolution,
+                                  window=window,
+                                  **kwargs)
+
         # fix for naming in differnt EOreader versions
         if 'z' in bands.coords:
             bands = bands.rename({'z': 'bands'})
@@ -275,10 +304,11 @@ class sentinel2_driver():
 
         return
 
-    def load_geom(self, method='linear'):
+    def load_geom(self,
+                  method='linear'):
 
         self.get_raw_angles()
-        self.get_all_band_angles(method=method)
+        self.get_all_band_angles( method=method)
 
     @staticmethod
     def linfit(beta, x):
@@ -446,8 +476,8 @@ class sentinel2_driver():
         for ibandId, bandId in enumerate(band_idx):
             if self.verbose:
                 print('Band number ' + str(bandId) + ' is being loaded')
-            new_vza.append(self.get_band_angle_as_numpy(raw_vza, bandId=bandId, resolution=self.resolution))
-            new_vazi.append(self.get_band_angle_as_numpy(raw_vazi, bandId=bandId, resolution=self.resolution))
+            new_vza.append(self.get_band_angle_as_numpy(raw_vza, bandId=bandId, resolution=self.resolution_angle))
+            new_vazi.append(self.get_band_angle_as_numpy(raw_vazi, bandId=bandId, resolution=self.resolution_angle))
         raa = (np.array(new_vazi) - new_sun_ang.sazi.values) % 360
 
         self.geom['vza'] = xr.DataArray(np.array(new_vza), dims=['wl', 'y', 'x'])
@@ -465,8 +495,9 @@ class sentinel2_driver():
         # new_ang['sza'] = new_sun_ang.sza
         # new_ang['razi'] = vazi.vazi - new_sun_ang.sazi) % 360
         # # new_ang['scat_ang'] = scat_angle(new_ang.sza, new_ang.vza, new_ang.razi)
-
-        # self.set_crs(new_ang, self.crs)
+        self.geom['x']=self.new_x
+        self.geom['y']=self.new_y
+        self.set_crs(self.geom, self.crs)
 
         del new_vza, new_vazi, raa, new_sun_ang
 

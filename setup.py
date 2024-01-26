@@ -4,7 +4,7 @@
 from setuptools import setup, find_packages
 
 __package__ = 's2driver'
-__version__ = '1.0.3'
+__version__ = '1.0.4'
 
 setup(
     name=__package__,

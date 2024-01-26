@@ -190,6 +190,6 @@ class view_geo(utils):
                         pn.Row('', range_slider),
                         pn.Row('#### Opacity', pn_opacity),
                         pn.Row('#### Colormap', pn_colormap))
-                )),
-            combined
+                ),
+            combined)
         )
