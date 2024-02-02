@@ -178,6 +178,8 @@ class sentinel2_driver():
         self.prod.attrs['tile'] = self.prod.attrs['PRODUCT_URI'].split('_')[5][1:]
         self.prod.attrs['solar_irradiance'] = self.solar_irradiance[:, 1]
         self.prod.attrs['solar_irradiance_unit'] = 'W/m²/µm'
+        self.prod.attrs['mean_solar_azimuth'] = self.mean_sun_azi
+        self.prod.attrs['mean_solar_zenith_angle'] = self.mean_sza
         self.prod.attrs['acquisition_date'] = self.prod.attrs['DATATAKE_1_DATATAKE_SENSING_START']
 
     def load_bands(self, subset=None,
@@ -255,6 +257,8 @@ class sentinel2_driver():
 
         raw_sza = self.parse_angular_grid_node(root.find('.//Tile_Angles/Sun_Angles_Grid/Zenith'))
         raw_sazi = self.parse_angular_grid_node(root.find('.//Tile_Angles/Sun_Angles_Grid/Azimuth'))
+        self.mean_sza= np.nanmean(raw_sza)
+        self.mean_sun_azi = np.nanmean(raw_sazi)
 
         # compute x and y for angle grids
         # check dimension
@@ -323,12 +327,12 @@ class sentinel2_driver():
         for ii in range(Nx):
             for jj in range(Ny):
                 detect = mask[ii, jj]
-                if detect == 0:
-                    continue
-                beta = betas[detect - detector_offset]
-                val = beta[0] * x[jj] + beta[1] * y[ii] + beta[2]
-                # compression using simple int8 and scale factor
-                arr[ii, jj] = (val * scale_factor)
+                if detect >=  detector_offset:
+                    #continue
+                    beta = betas[detect - detector_offset]
+                    val = beta[0] * x[jj] + beta[1] * y[ii] + beta[2]
+                    # compression using simple int8 and scale factor
+                    arr[ii, jj] = (val * scale_factor)
 
     def data_fitting(self, x0, y0, arr):
         # ---------------------------------
@@ -363,7 +367,9 @@ class sentinel2_driver():
 
         return resfit.beta
 
-    def get_detector_mask(self, bandId=0, resolution=20, detector_mask_name='DETFOO'):
+    def get_detector_mask(self, bandId=0,
+                          resolution=20,
+                          detector_mask_name='DETFOO'):
 
         if self.processing_baseline < 4:
             mask_df = self._open_mask(detector_mask_name, BAND_ID[bandId])
@@ -377,11 +383,15 @@ class sentinel2_driver():
             # TODO deprecate 'resolution' argument, 'pixel_size' is used instead since EOReader 0.20
             mask = self._open_mask(detector_mask_name, BAND_ID[bandId], resolution=resolution,
                                    pixel_size=resolution).astype(np.int8)
+
             mask = mask.squeeze()
         return np.array(mask)
 
-    def get_band_angle_as_numpy(self, xarr, bandId=0, resolution=20,
-                                detector_mask_name='DETFOO', compress=False,
+    def get_band_angle_as_numpy(self, xarr,
+                                bandId=0,
+                                resolution=20,
+                                detector_mask_name='DETFOO',
+                                compress=False,
                                 ):
         '''
 
@@ -393,7 +403,7 @@ class sentinel2_driver():
         :return:
         '''
 
-        detector_offset = xarr.detectorId.values.min()
+        detector_offset = int(xarr.detectorId.min())
         mask = self.get_detector_mask(bandId=bandId, resolution=resolution)
 
         # TODO check how to avoid taking the nodata value "0" when coarsening the raster
