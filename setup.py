@@ -23,10 +23,10 @@ setup(
     description='driver dedicated to the Level 1C of the ESA Sentinel-2 imagery including accurate computations of the viewing angle for each spectral band',
 
     # Dependent packages (distributions)
-    install_requires=['numpy', 'scipy', 'pandas', 'xarray',
-                      'matplotlib', 'rasterio', 'cartopy',
-                      'numba','eoreader',
-                      'geopandas','affine','shapely','memory_profiler','xmltodict' ,'importlib_resources']
+    # install_requires=['numpy', 'scipy', 'pandas', 'xarray',
+    #                   'matplotlib', 'rasterio', 'cartopy',
+    #                   'numba','eoreader',
+    #                   'geopandas','affine','shapely','memory_profiler','xmltodict' ,'importlib_resources']
     # entry_points={
     #     'console_scripts': [
     #         's2driver = TODO'

@@ -1,23 +1,20 @@
 # s2driver package
 ## Tool for easy loading of Sentinel-2 L1C SAFE format with accurate computation of the viewing angles
 
-# Installation
-### please use conda environment
-conda activate "name of your conda environment"
-
-conda install numba rasterio
-
-conda install gdal
-
+# Installation on TREX
+module load conda
+conda env create -f environment.yml
+conda activate grs_cnes
 pip install .
 
-## Installation of the missing modules
+### Usual installation, please use conda environment
+conda create -n "YOUR_ENV" python=3.11
 
-conda install "name of the missing module"
+conda activate "YOUR_ENV"
 
-## If it doesn't work because of conflicts between modules versions try :
+conda install gdal numba rasterio
 
-pip install "name of the missing module"
+pip install .
 
 ## Example
 

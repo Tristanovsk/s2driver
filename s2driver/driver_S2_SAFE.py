@@ -14,7 +14,7 @@ from rasterio.features import rasterize
 import scipy.odr as odr
 from affine import Affine
 from osgeo import gdal, ogr
-import cartopy.crs as ccrs
+#import cartopy.crs as ccrs
 from pyproj import CRS
 import eoreader as eo
 
