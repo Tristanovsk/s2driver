@@ -3,8 +3,11 @@
 
 # Installation on TREX
 module load conda
+
 conda env create -f environment.yml
+
 conda activate grs_cnes
+
 pip install .
 
 ### Usual installation, please use conda environment
