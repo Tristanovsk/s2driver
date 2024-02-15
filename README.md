@@ -1,14 +1,24 @@
 # s2driver package
 ## Tool for easy loading of Sentinel-2 L1C SAFE format with accurate computation of the viewing angles
 
-# Installation on TREX
+### Installation on TREX (CNES)
+1. First clone the repository:
+```commandline
+git clone https://gitlab.cnes.fr/waterquality/io/s2driver
+```
+
+2. Create the conda environment 'grs_cnes'
+```commandline
 module load conda
-
 conda env create -f environment.yml
+```
 
+3. Install s2driver
+```commandline
 conda activate grs_cnes
-
 pip install .
+```
+You are done.
 
 ### Usual installation, please use conda environment
 conda create -n "YOUR_ENV" python=3.11
