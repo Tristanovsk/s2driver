@@ -219,7 +219,7 @@ class sentinel2_driver():
 
         # compute central wavelengths
         wl_true = []
-        for wl_, srf in self.prod.SRF.groupby('wl'):
+        for wl_, srf in self.prod.SRF.groupby('wl', squeeze=False):
             srf = srf.dropna('wl_hr')
             wl_true.append((srf.wl_hr * srf).integrate('wl_hr') / srf.integrate('wl_hr'))
         wl_true = xr.concat(wl_true, dim='wl')
