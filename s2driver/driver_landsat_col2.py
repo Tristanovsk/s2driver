@@ -45,13 +45,18 @@ INFO = pd.DataFrame({'bandId': range(len(BAND_NAMES)),
 
 
 class landsat_driver():
-    def __init__(self, image_path, band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8],
-                 resolution=30, verbose=False, **kwargs):
+    def __init__(self, image_path,
+                 band_idx=[0, 1, 2, 3, 4, 5, 6, 7, 8],
+                 band_tbp_idx=[0, 1, 2, 3, 4, 5, 7, 8],
+                 resolution=30,
+                 verbose=False,
+                 **kwargs):
 
         self.abspath = os.path.abspath(image_path)
         dirroot, basename = os.path.split(self.abspath)
         self.verbose = verbose
         self.band_idx = band_idx
+        self.band_tbp_idx = band_tbp_idx
         self.resolution = resolution
         self.INFO = INFO[band_idx]
 
@@ -96,13 +101,20 @@ class landsat_driver():
 
         self.SRFs = xr.open_dataset(srf_file)
 
-    def load_product(self, add_time=False, **kwargs):
+    def load_product(self, add_time=True, **kwargs):
 
         self.load_bands(add_time=add_time, **kwargs)
         self.load_geom()
         self.load_mask()
         self.prod = xr.merge([self.prod, self.geom,self.mask])
         del self.geom,self.mask
+
+        # -----------------------------------------------------------
+        # convert band from normalized radiance into reflectance
+        # -----------------------------------------------------------
+        self.prod['bands']=self.prod['bands'] / np.cos(np.radians(self.prod['sza']))
+
+
         self.prod.attrs = self.prod.attrs
         self.prod.attrs['satellite'] = self.satellite
         self.prod.attrs['solar_irradiance'] = 'NA'  # self.solar_irradiance #[:, 1]
@@ -116,7 +128,7 @@ class landsat_driver():
                                    ).squeeze().rename(
                                     {RAW_CLOUDS: "l1c_flag"}).astype(np.uint32)
 
-    def load_bands(self, add_time=False, **kwargs):
+    def load_bands(self, add_time=True, **kwargs):
 
         # ----------------------------------
         # getting bands
@@ -133,6 +145,7 @@ class landsat_driver():
             swap_dims({'bands': 'wl'}).drop({'band', 'bands', 'variable'})
         self.prod = self.prod.assign_coords(bandID=('wl', self.INFO.loc['ESA'].values))
         self.prod = self.prod.to_dataset(name='bands', promote_attrs=True)
+        self.prod.attrs['wl_to_process'] = WAVELENGTH[self.band_tbp_idx]
 
         # add spectral response function
         self.prod = xr.merge([self.prod, self.SRFs.sel(wl=self.prod.wl.values)]).drop_vars('bandID')
@@ -148,7 +161,7 @@ class landsat_driver():
 
         # add time
         if add_time:
-            self.prod = self.prod.assign_coords(time=self.datetime).expand_dims('time')
+            self.prod = self.prod.assign_coords(time=self.datetime) #.expand_dims('time')
         # self.prod.clear()
 
     def load_geom(self, scale_factor=0.01,
