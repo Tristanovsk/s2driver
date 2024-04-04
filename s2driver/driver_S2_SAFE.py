@@ -159,7 +159,7 @@ class sentinel2_driver():
             self._open_mask = reader._open_mask_gt_4_0
 
     def load_product(self,
-                     add_time=False,
+                     add_time=True,
                      **kwargs):
 
         self.load_bands(subset=self.subset, add_time=add_time, **kwargs)
@@ -183,7 +183,7 @@ class sentinel2_driver():
         self.prod.attrs['acquisition_date'] = self.prod.attrs['DATATAKE_1_DATATAKE_SENSING_START']
 
     def load_bands(self, subset=None,
-                   add_time=False,
+                   add_time=True,
                    **kwargs):
 
         # ----------------------------------
@@ -228,7 +228,7 @@ class sentinel2_driver():
 
         # add time
         if add_time:
-            self.prod = self.prod.assign_coords(time=self.datetime).expand_dims('time')
+            self.prod = self.prod.assign_coords(time=self.datetime) #.expand_dims('time')
         # self.prod.clear()
 
     @staticmethod
